@@ -9,6 +9,8 @@ from rest_framework.status import (
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
 
 from .serializers import (
     UserSerializer,
@@ -28,6 +30,7 @@ class HealthView(APIView):
         return Response({'status': 'ok'}, status=HTTP_200_OK)
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class RegisterView(APIView):
     """Endpoint para registro de novo usuário."""
     permission_classes = [AllowAny]

@@ -52,6 +52,16 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
+# CSRF Configuration - Exempt API endpoints from CSRF
+CSRF_TRUSTED_ORIGINS = [
+    'https://enviador-backend-ca2c88a2ae88.herokuapp.com',
+    'https://*.vercel.app',
+    'http://localhost:5173',
+    'http://localhost:5174',
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:5174',
+]
+
 ROOT_URLCONF = 'enviador.urls'
 
 TEMPLATES = [
