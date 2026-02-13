@@ -17,6 +17,7 @@ from core.settings.base import *
 from core.settings.rest_framework import REST_FRAMEWORK
 from core.settings.cors import (
     CORS_ALLOWED_ORIGINS,
+    CORS_ALLOWED_ORIGIN_REGEXES,
     CORS_ALLOW_CREDENTIALS,
     CORS_ALLOW_HEADERS,
     CORS_EXPOSE_HEADERS,
