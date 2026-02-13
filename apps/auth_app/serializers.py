@@ -3,6 +3,8 @@
 from rest_framework import serializers
 from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -35,6 +37,34 @@ class UserRegisterSerializer(serializers.ModelSerializer):
             'first_name': {'required': False},
             'last_name': {'required': False},
         }
+    
+    def validate_username(self, value):
+        """Verificar se username já existe."""
+        if User.objects.filter(username=value).exists():
+            raise serializers.ValidationError(
+                'Este nome de usuário já está registrado.'
+            )
+        return value
+    
+    def validate_email(self, value):
+        """Verificar se email já está registrado e se é válido."""
+        if not value:
+            raise serializers.ValidationError(
+                'O email é obrigatório.'
+            )
+        if User.objects.filter(email=value).exists():
+            raise serializers.ValidationError(
+                'Este email já está registrado.'
+            )
+        return value
+    
+    def validate_password(self, value):
+        """Validar senha contra as regras do Django."""
+        try:
+            validate_password(value)
+        except ValidationError as e:
+            raise serializers.ValidationError(e.messages)
+        return value
     
     def validate(self, data):
         """Validar que as senhas coincidem."""
