@@ -11,8 +11,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'replace-this-in-prod')
 DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', '*.localhost', 'enviador-backend-ca2c88a2ae88.herokuapp.com']
-
+ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS').split(',') if os.getenv('ALLOWED_HOSTS') else []
 # Django Apps
 DJANGO_APPS = [
     'django.contrib.admin',
