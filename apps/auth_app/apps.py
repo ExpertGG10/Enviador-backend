@@ -1,0 +1,9 @@
+"""Configuração da app de Autenticação."""
+
+from django.apps import AppConfig
+
+
+class AuthConfig(AppConfig):
+    default_auto_field = 'django.db.models.BigAutoField'
+    name = 'apps.auth_app'
+    verbose_name = 'Autenticação e Usuários'
