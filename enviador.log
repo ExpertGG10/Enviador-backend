@@ -36,3 +36,57 @@ INFO 2026-02-09 13:03:18,328 basehttp 3964 8124 "POST /api/auth/login/ HTTP/1.1"
 INFO 2026-02-09 13:06:36,756 basehttp 3964 5432 "POST /api/auth/logout/ HTTP/1.1" 200 42
 INFO 2026-02-10 10:27:52,602 autoreload 14240 13704 Watching for file changes with StatReloader
 INFO 2026-02-10 10:29:00,978 basehttp 14240 13216 "POST /api/auth/login/ HTTP/1.1" 200 228
+INFO 2026-02-13 15:06:49,762 autoreload 8584 23176 Watching for file changes with StatReloader
+INFO 2026-02-13 15:07:19,413 basehttp 8584 25280 "OPTIONS /api/auth/logout/ HTTP/1.1" 200 0
+INFO 2026-02-13 15:07:19,438 basehttp 8584 25280 "POST /api/auth/logout/ HTTP/1.1" 200 42
+INFO 2026-02-13 15:07:28,460 basehttp 8584 25280 "OPTIONS /api/auth/login/ HTTP/1.1" 200 0
+WARNING 2026-02-13 15:07:28,823 log 8584 25280 Unauthorized: /api/auth/login/
+WARNING 2026-02-13 15:07:28,825 basehttp 8584 25280 "POST /api/auth/login/ HTTP/1.1" 401 80
+WARNING 2026-02-13 15:07:59,230 log 8584 25280 Unauthorized: /api/auth/login/
+WARNING 2026-02-13 15:07:59,230 basehttp 8584 25280 "POST /api/auth/login/ HTTP/1.1" 401 80
+INFO 2026-02-13 15:08:27,556 basehttp 8584 25280 "OPTIONS /api/auth/register/ HTTP/1.1" 200 0
+WARNING 2026-02-13 15:08:27,567 log 8584 25280 Bad Request: /api/auth/register/
+WARNING 2026-02-13 15:08:27,568 basehttp 8584 25280 "POST /api/auth/register/ HTTP/1.1" 400 66
+INFO 2026-02-13 15:08:33,068 basehttp 8584 25280 "POST /api/auth/register/ HTTP/1.1" 201 220
+INFO 2026-02-13 15:13:41,315 basehttp 8584 2312 "OPTIONS /api/jobs/start/ HTTP/1.1" 200 0
+INFO 2026-02-13 15:13:41,358 basehttp 8584 2312 "POST /api/jobs/start/ HTTP/1.1" 202 71
+INFO 2026-02-13 15:13:41,377 basehttp 8584 2312 "OPTIONS /api/jobs/b4f68077-14fe-4373-9375-e5a10f93bbec/ HTTP/1.1" 200 0
+INFO 2026-02-13 15:13:41,383 basehttp 8584 2312 "OPTIONS /api/jobs/b4f68077-14fe-4373-9375-e5a10f93bbec/ HTTP/1.1" 200 0
+INFO 2026-02-13 15:13:41,396 basehttp 8584 2312 "GET /api/jobs/b4f68077-14fe-4373-9375-e5a10f93bbec/ HTTP/1.1" 200 218
+INFO 2026-02-13 15:13:41,407 basehttp 8584 2312 "GET /api/jobs/b4f68077-14fe-4373-9375-e5a10f93bbec/ HTTP/1.1" 200 218
+INFO 2026-02-13 15:13:42,596 basehttp 8584 2312 "GET /api/jobs/b4f68077-14fe-4373-9375-e5a10f93bbec/ HTTP/1.1" 200 218
+INFO 2026-02-13 15:13:43,386 basehttp 8584 2312 "GET /api/jobs/b4f68077-14fe-4373-9375-e5a10f93bbec/ HTTP/1.1" 200 218
+ERROR 2026-02-13 15:13:43,436 email_service 8584 24960 [SEND] Erro geral no processamento: (535, b'5.7.8 Username and Password not accepted. For more information, go to\n5.7.8  https://support.google.com/mail/?p=BadCredentials a92af1059eb24-1272a6f3256sm9044947c88.14 - gsmtp')
+Traceback (most recent call last):
+  File "C:\Users\lucas\OneDrive\Área de Trabalho\Presente\Rio Software\Enviador-backend\api\services\email_service.py", line 247, in send
+    email_service = EmailService(sender, app_password)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lucas\OneDrive\Área de Trabalho\Presente\Rio Software\Enviador-backend\api\services\email_service.py", line 74, in __init__
+    self.smtp_server.login(self.sender.email, self.password)
+  File "C:\Users\lucas\AppData\Local\Programs\Python\Python311\Lib\smtplib.py", line 750, in login
+    raise last_exception
+  File "C:\Users\lucas\AppData\Local\Programs\Python\Python311\Lib\smtplib.py", line 739, in login
+    (code, resp) = self.auth(
+                   ^^^^^^^^^^
+  File "C:\Users\lucas\AppData\Local\Programs\Python\Python311\Lib\smtplib.py", line 662, in auth
+    raise SMTPAuthenticationError(code, resp)
+smtplib.SMTPAuthenticationError: (535, b'5.7.8 Username and Password not accepted. For more information, go to\n5.7.8  https://support.google.com/mail/?p=BadCredentials a92af1059eb24-1272a6f3256sm9044947c88.14 - gsmtp')
+INFO 2026-02-13 15:13:44,400 basehttp 8584 2312 "GET /api/jobs/b4f68077-14fe-4373-9375-e5a10f93bbec/ HTTP/1.1" 200 215
+INFO 2026-02-13 15:14:13,197 basehttp 8584 2312 "POST /api/jobs/start/ HTTP/1.1" 202 71
+INFO 2026-02-13 15:14:13,237 basehttp 8584 11500 "OPTIONS /api/jobs/18613dc1-dc42-4257-9fd2-db38473b043a/ HTTP/1.1" 200 0
+INFO 2026-02-13 15:14:13,237 basehttp 8584 2312 "OPTIONS /api/jobs/18613dc1-dc42-4257-9fd2-db38473b043a/ HTTP/1.1" 200 0
+INFO 2026-02-13 15:14:13,260 basehttp 8584 2312 "GET /api/jobs/18613dc1-dc42-4257-9fd2-db38473b043a/ HTTP/1.1" 200 221
+INFO 2026-02-13 15:14:13,273 basehttp 8584 11500 "GET /api/jobs/18613dc1-dc42-4257-9fd2-db38473b043a/ HTTP/1.1" 200 221
+INFO 2026-02-13 15:14:14,212 email_service 8584 23420 [SEND] Enviando para 21 destinatário(s)
+INFO 2026-02-13 15:14:14,257 basehttp 8584 11500 "GET /api/jobs/18613dc1-dc42-4257-9fd2-db38473b043a/ HTTP/1.1" 200 222
+INFO 2026-02-13 15:14:15,276 basehttp 8584 11500 "GET /api/jobs/18613dc1-dc42-4257-9fd2-db38473b043a/ HTTP/1.1" 200 222
+INFO 2026-02-13 15:14:16,244 basehttp 8584 11500 "GET /api/jobs/18613dc1-dc42-4257-9fd2-db38473b043a/ HTTP/1.1" 200 326
+INFO 2026-02-13 15:14:17,247 basehttp 8584 11500 "GET /api/jobs/18613dc1-dc42-4257-9fd2-db38473b043a/ HTTP/1.1" 200 432
+INFO 2026-02-13 15:14:17,991 basehttp 8584 11500 "OPTIONS /api/jobs/18613dc1-dc42-4257-9fd2-db38473b043a/cancel/ HTTP/1.1" 200 0
+INFO 2026-02-13 15:14:17,997 basehttp 8584 11500 "POST /api/jobs/18613dc1-dc42-4257-9fd2-db38473b043a/cancel/ HTTP/1.1" 200 72
+INFO 2026-02-13 15:14:18,247 basehttp 8584 11500 "GET /api/jobs/18613dc1-dc42-4257-9fd2-db38473b043a/ HTTP/1.1" 200 432
+INFO 2026-02-13 15:14:18,441 email_service 8584 23420 [SEND] Envio concluído: 3 sucesso, 0 falhas
+INFO 2026-02-13 15:14:19,259 basehttp 8584 11500 "GET /api/jobs/18613dc1-dc42-4257-9fd2-db38473b043a/ HTTP/1.1" 200 533
+INFO 2026-02-13 15:16:10,716 basehttp 8584 11500 "POST /api/jobs/start/ HTTP/1.1" 202 71
+INFO 2026-02-13 15:16:11,746 email_service 8584 20932 [SEND] Enviando para 21 destinatário(s)
+INFO 2026-02-13 15:16:41,422 email_service 8584 20932 [SEND] Envio concluído: 21 sucesso, 0 falhas
