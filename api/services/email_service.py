@@ -40,9 +40,13 @@ class BytesFileWrapper:
         Args:
             data: Dicionário com 'name', 'content' e 'size'
         """
-        self.name = data.get('name', 'unknown')
-        self.size = data.get('size', 0)
-        self._content = data.get('content', b'')
+        print(f"[DEBUG] BytesFileWrapper init: data type={type(data)}, is_dict={isinstance(data, dict)}")
+        if isinstance(data, dict):
+            print(f"[DEBUG] BytesFileWrapper init: dict keys={list(data.keys())}")
+        self.name = data.get('name', 'unknown') if isinstance(data, dict) else 'unknown'
+        self.size = data.get('size', 0) if isinstance(data, dict) else 0
+        self._content = data.get('content', b'') if isinstance(data, dict) else b''
+        print(f"[DEBUG] BytesFileWrapper init: name={self.name}, size={self.size}, content_len={len(self._content)}")
         self._file_obj = BytesIO(self._content)
     
     def read(self, size=-1):
@@ -216,6 +220,18 @@ class EmailService:
             attach_to_all = payload.get('attach_to_all', False)
             attachment_names = payload.get('attachment_names', [])
             files = payload.get('_files', {})
+            match_mode = payload.get('match_mode', 'contem')
+            
+            # Debug file structure
+            print(f"[DEBUG] Files from payload - type: {type(files)}, keys: {list(files.keys()) if isinstance(files, dict) else 'NOT A DICT'}")
+            for key in (files.keys() if isinstance(files, dict) else []):
+                file_list = files[key]
+                print(f"[DEBUG] files['{key}'] - type: {type(file_list)}, length: {len(file_list) if isinstance(file_list, list) else 'NOT A LIST'}")
+                if isinstance(file_list, list):
+                    for i, item in enumerate(file_list):
+                        print(f"[DEBUG]   Item {i}: type={type(item)}, is_dict={isinstance(item, dict)}")
+                        if isinstance(item, dict):
+                            print(f"[DEBUG]     Keys: {list(item.keys())}")
             
             # Validate required fields
             if not email_sender or not app_password:
@@ -265,25 +281,47 @@ class EmailService:
             attachments_map_by_name = {}
             if files:
                 for key, file_list in files.items():
-                    for file_data in file_list:
+                    print(f"[DEBUG] Processing files['{key}']")
+                    for idx, file_data in enumerate(file_list):
+                        print(f"[DEBUG]   File {idx}: type={type(file_data)}, is_dict={isinstance(file_data, dict)}")
                         if not file_data:
+                            print(f"[DEBUG]   File {idx}: EMPTY/NONE - skipping")
                             continue
                         
                         # Converter dados em bytes para um objeto file-like
                         if isinstance(file_data, dict):
+                            print(f"[DEBUG]   File {idx}: Creating BytesFileWrapper from dict with keys {list(file_data.keys())}")
                             uploaded_file = BytesFileWrapper(file_data)
                         else:
+                            print(f"[DEBUG]   File {idx}: Using as-is (type: {type(file_data)})")
                             uploaded_file = file_data
                         
                         fname = getattr(uploaded_file, 'name', None) or str(uploaded_file)
+                        print(f"[DEBUG]   File {idx}: fname={fname}")
                         
                         # normalize: remove extension and clean up
                         base = os.path.splitext(os.path.basename(fname))[0]
                         norm = _normalize(base)
+                        print(f"[DEBUG]   File {idx}: base={base}, normalized={norm}")
                         
                         if norm:
                             attachments_map_by_name[norm] = uploaded_file
+                            print(f"[DEBUG]   File {idx}: Added to map as '{norm}'")
 
+            print(f"[DEBUG] Final attachments map: {list(attachments_map_by_name.keys())}")
+            
+            # Define match mode function
+            def _matches_mode(norm_ref: str, norm_file: str) -> bool:
+                match_mode = payload.get('match_mode', 'contem')
+                if match_mode == 'igual':
+                    return norm_ref == norm_file
+                if match_mode == 'comeca_com':
+                    return norm_file.startswith(norm_ref)
+                if match_mode == 'termina_com':
+                    return norm_file.endswith(norm_ref)
+                # default: contem
+                return norm_ref in norm_file
+            
             # Prepare global attachments (attach to all) if requested
             global_attachments = []
             
@@ -299,10 +337,18 @@ class EmailService:
                             
                             global_attachments.append(uploaded_file)
 
+            print(f"[DEBUG] Global attachments count: {len(global_attachments)}")
+            
             # Build recipients data list with per-recipient subject/body/attachments
             recipients_data = []
             
+            print(f"[DEBUG] STARTING RECIPIENT PROCESSING: attach_to_all={attach_to_all}, file_column={file_column}")
+            
             for idx, row in enumerate(rows):
+                print(f"[DEBUG] === ROW {idx} ===")
+                print(f"[DEBUG] Row data: {row}")
+                print(f"[DEBUG] Row keys: {list(row.keys())}")
+                
                 if contact_column not in row:
                     continue
                 
@@ -331,6 +377,7 @@ class EmailService:
                 attachments_for_recipient = None
                 if not attach_to_all and file_column and file_column in row:
                     raw_refs = row[file_column]
+                    print(f"[DEBUG] Recipient {email}: raw_refs = {raw_refs}, file_column = {file_column}")
                     
                     refs = []
                     if isinstance(raw_refs, (list, tuple)):
@@ -345,6 +392,8 @@ class EmailService:
                     else:
                         refs = [str(raw_refs)]
 
+                    print(f"[DEBUG] Recipient {email}: parsed refs = {refs}")
+                    
                     resolved = []
                     for ref in refs:
                         if not ref:
@@ -354,22 +403,30 @@ class EmailService:
                         # normalize reference (strip extension, arrows, whitespace)
                         norm_ref = _normalize(key)
                         
-                        # Try normalized name match (ignores extensions like .jpg)
-                        found = attachments_map_by_name.get(norm_ref)
-                        if found:
-                            resolved.append(found)
-                            continue
+                        # Try normalized name match using selected mode
+                        # For 'contem' mode, collect ALL matches; for others, get just the first
+                        found_matches = []
+                        for file_norm, file_obj in attachments_map_by_name.items():
+                            if _matches_mode(norm_ref, file_norm):
+                                found_matches.append(file_obj)
+                                if match_mode != 'contem':
+                                    break
                         
-                        # Last resort: if the ref looks like a path on disk, include it
-                        if os.path.isfile(key):
-                            resolved.append(key)
+                        if found_matches:
+                            resolved.extend(found_matches)
+                            continue
 
                     if resolved:
                         attachments_for_recipient = resolved
+                        print(f"[DEBUG] Recipient {email}: resolved {len(resolved)} attachments")
+                    else:
+                        print(f"[DEBUG] Recipient {email}: no attachments resolved")
                 else:
                     if global_attachments:
                         attachments_for_recipient = global_attachments
 
+                print(f"[DEBUG] Recipient {email}: attachments count {len(attachments_for_recipient) if attachments_for_recipient else 0}")
+                
                 recipients_data.append({
                     'email': email,
                     'subject': personalized_subject,

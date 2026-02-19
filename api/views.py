@@ -143,10 +143,6 @@ def send_whatsapp_view(request):
     """
     origin = request.META.get('HTTP_ORIGIN', 'NO_ORIGIN')
     user = request.user
-    print(f"\n{'='*80}")
-    print(f"[BACKEND WHATSAPP] Requisição recebida de: {origin}")
-    print(f"[BACKEND WHATSAPP] Usuário autenticado: {user.username}")
-    print(f"[BACKEND WHATSAPP] Content-Type: {request.content_type}")
     
     # Parse payload from JSON or multipart form data
     if request.content_type and request.content_type.startswith('multipart/'):
@@ -223,10 +219,6 @@ def send_view(request):
     """
     origin = request.META.get('HTTP_ORIGIN', 'NO_ORIGIN')
     user = request.user
-    print(f"\n{'='*80}")
-    print(f"[BACKEND GENERIC] Requisição recebida de: {origin}")
-    print(f"[BACKEND GENERIC] Usuário autenticado: {user.username}")
-    print(f"[BACKEND GENERIC] Content-Type: {request.content_type}")
     
     # Accept JSON or multipart/form-data (with files). If multipart, payload must be in a 'payload' form field as JSON
     if request.content_type and request.content_type.startswith('multipart/'):
@@ -243,7 +235,6 @@ def send_view(request):
             file_list = request.FILES.getlist(key)
             files.extend(file_list)
         attachment_names = [f.name for f in files]
-        print(f"[BACKEND] Arquivos recebidos: {attachment_names}")
         payload['attachment_names'] = attachment_names
         payload['_files'] = request.FILES  # pass files for services if needed
     else:
@@ -251,15 +242,6 @@ def send_view(request):
             payload = json.loads(request.body)
         except json.JSONDecodeError:
             return HttpResponseBadRequest('Invalid JSON')
-
-    print(f"[BACKEND] Payload recebido:")
-    print(f"  - Canal: {payload.get('channel')}")
-    print(f"  - Assunto: {payload.get('subject', 'N/A')}")
-    print(f"  - Mensagem: {payload.get('message')[:50]}..." if len(payload.get('message', '')) > 50 else f"  - Mensagem: {payload.get('message')}")
-    print(f"  - Linhas: {len(payload.get('rows', []))}")
-    print(f"  - Coluna de contato: {payload.get('contact_column')}")
-    print(f"  - Coluna de arquivo: {payload.get('file_column', 'N/A')}")
-    print(f"  - Anexar a todos: {payload.get('attach_to_all')}")
     
     channel = payload.get('channel', 'email')
     if channel not in ('email', 'whatsapp'):
@@ -293,12 +275,10 @@ def send_view(request):
             return JsonResponse({"error": "email_sender is required for email channel"}, status=400)
         if not app_password:
             return JsonResponse({"error": "app_password is required for email channel"}, status=400)
-        print(f"  - Remetente (email): {email_sender}")
     else:  # whatsapp
         phone_number = payload.get('phone_number')
         if not phone_number:
             return JsonResponse({"error": "phone_number is required for WhatsApp channel"}, status=400)
-        print(f"  - Número (WhatsApp): {phone_number}")
 
     # Delegate to service implementations
     from .services.email_service import EmailService
@@ -309,8 +289,6 @@ def send_view(request):
     else:
         response = WhatsAppService.send(payload)
 
-    print(f"[BACKEND] Resposta enviada com {len(response.get('previews', []))} previews")
-    print(f"{'='*80}\n")
     
     return JsonResponse(response, status=202)
 
@@ -342,12 +320,6 @@ def whatsapp_test_view(request):
     template_name = data.get('template_name', 'jaspers_market_plain_text_v1')
     language_code = data.get('language_code', 'en_US')
     
-    print(f"\n{'='*80}")
-    print(f"[WHATSAPP TEST] Testando envio via endpoint")
-    print(f"[WHATSAPP TEST] Número: {phone_number}")
-    print(f"[WHATSAPP TEST] Template: {template_name}")
-    print(f"{'='*80}\n")
-    
     result = WhatsAppAPI.send_template_message(
         to_number=phone_number,
         template_name=template_name,
@@ -377,9 +349,6 @@ def whatsapp_webhook_view(request):
     except json.JSONDecodeError:
         return JsonResponse({'error': 'Invalid JSON'}, status=400)
     
-    print(f"\n{'='*80}")
-    print(f"[WEBHOOK] Evento recebido de {request.META.get('HTTP_ORIGIN', 'UNKNOWN')}")
-    print(f"{'='*80}")
 
 
 
@@ -401,10 +370,14 @@ def jobs_start_view(request):
             return HttpResponseBadRequest('Invalid JSON in payload field')
         
         files_bytes = {}
+        print(f"[DEBUG] request.FILES keys: {list(request.FILES.keys())}")
+        print(f"[DEBUG] request.FILES type: {type(request.FILES)}")
         for key in request.FILES:
             file_list = request.FILES.getlist(key)
+            print(f"[DEBUG] Processing key '{key}': {len(file_list)} file(s)")
             files_bytes[key] = []
             for f in file_list:
+                print(f"[DEBUG] File object: {f}, type: {type(f)}, name: {f.name}, size: {f.size}")
                 f.seek(0)
                 content = f.read()
                 files_bytes[key].append({
@@ -412,6 +385,12 @@ def jobs_start_view(request):
                     'content': content,
                     'size': len(content)
                 })
+        
+        print(f"[DEBUG] files_bytes keys: {list(files_bytes.keys())}")
+        for key in files_bytes:
+            print(f"[DEBUG] files_bytes['{key}'] has {len(files_bytes[key])} items")
+            for i, item in enumerate(files_bytes[key]):
+                print(f"[DEBUG]   Item {i}: name={item.get('name')}, size={item.get('size')}")
         
         payload['_files'] = files_bytes
     else:
@@ -508,7 +487,6 @@ def whatsapp_webhook_verify_view(request):
     challenge = request.GET.get('hub.challenge')
     verify_token = request.GET.get('hub.verify_token')
     
-    print(f"\n[WEBHOOK VERIFY] mode={mode}, verify_token={verify_token}")
     
     # You should set this in your environment
     expected_token = 'seu_token_de_verificacao_aqui'
