@@ -117,6 +117,7 @@ def run_job_in_thread(job_id: str):
         job = get_job(job_id)
         payload = job.get('payload') if job else {}
         try:
+            print(f"[JOB {job_id}] Starting job with payload: {payload}")
             result = EmailService.send(payload, job_id=job_id)
             mark_done(job_id, result)
         except Exception as e:

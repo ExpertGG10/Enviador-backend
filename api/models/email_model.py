@@ -33,6 +33,8 @@ class EmailModel:
         """
         Create an email message from the model's attributes.
         """
+        print(f"[DEBUG] Creating message for {self.recipient_address} with {len(self.attachments)} attachments")
+        
         # If there are attachments, use MIMEMultipart
         if self.attachments:
             msg = MIMEMultipart()
@@ -73,6 +75,7 @@ class EmailModel:
                         encoders.encode_base64(part)
                         part.add_header('Content-Disposition', f'attachment; filename="{os.path.basename(filename)}"')
                         msg.attach(part)
+                        print(f"[DEBUG] Attached file: {filename}, size: {len(data)}")
                         continue
                 except Exception:
                     # Fall back to path-based handling
@@ -100,6 +103,7 @@ class EmailModel:
             msg: Mensagem MIMEMultipart
             file_path: Caminho para o arquivo anexo
         """
+        print(f"[DEBUG] Adding attachment from path: {file_path}")
         try:
             # Detectar tipo MIME do arquivo
             mime_type, _ = mimetypes.guess_type(file_path)
@@ -129,4 +133,5 @@ class EmailModel:
             msg.attach(part)
             
         except Exception:
+            print(f"[DEBUG] Failed to add attachment: {file_path}")
             pass

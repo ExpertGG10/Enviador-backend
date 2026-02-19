@@ -10,7 +10,6 @@ def log_webhook_event(event_data):
     Args:
         event_data: Dados do evento do webhook
     """
-    print(f"[WEBHOOK] Evento recebido: {event_data}")
     return True
 
 
