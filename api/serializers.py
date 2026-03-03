@@ -93,7 +93,9 @@ class ChangePasswordSerializer(serializers.Serializer):
 
 
 # Email Models Serializers
-from .models import Sender, Recipient, RecipientGroup, EmailLog
+from apps.senders.models import Sender
+from apps.recipients.models import Recipient, RecipientGroup
+from apps.emails.models import EmailLog
 from .validators import validate_email
 
 

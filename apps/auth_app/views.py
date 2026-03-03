@@ -16,9 +16,22 @@ from .serializers import (
     UserSerializer,
     UserRegisterSerializer,
     LoginSerializer,
-    ChangePasswordSerializer
+    ChangePasswordSerializer,
+    AccountSettingsSerializer,
+    AccountSettingsResponseSerializer,
+    GmailSenderSerializer,
+    GmailTemplateSerializer,
+    WhatsAppSenderSerializer,
+    WhatsAppTemplateSerializer,
 )
 from .services import AuthService
+from .models import (
+    AccountSettings,
+    GmailSender,
+    GmailTemplate,
+    WhatsAppSender,
+    WhatsAppTemplate,
+)
 
 
 class HealthView(APIView):
@@ -177,3 +190,271 @@ class ListUsersView(APIView):
         users = User.objects.all()
         serializer = UserSerializer(users, many=True)
         return Response(serializer.data, status=HTTP_200_OK)
+
+
+class AccountSettingsView(APIView):
+    """Endpoint para obter/atualizar configurações da conta do usuário autenticado."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        """GET /api/account/settings/"""
+        settings_obj, _ = AccountSettings.objects.get_or_create(user=request.user)
+
+        gmail_senders = GmailSender.objects.filter(user=request.user).prefetch_related('templates').order_by('-created_at')
+        whatsapp_senders = WhatsAppSender.objects.filter(user=request.user).prefetch_related('templates').order_by('-created_at')
+
+        first_gmail = gmail_senders.first()
+        first_whatsapp = whatsapp_senders.first()
+
+        whatsapp_titles = []
+        if first_whatsapp:
+            whatsapp_titles = list(first_whatsapp.templates.order_by('title').values_list('title', flat=True))
+        elif settings_obj.whatsapp_templates:
+            whatsapp_titles = settings_obj.whatsapp_templates
+
+        response_payload = {
+            'gmail': {
+                'senderEmail': first_gmail.sender_email if first_gmail else settings_obj.gmail_sender_email,
+                'appPassword': settings_obj.gmail_app_password,
+            },
+            'whatsapp': {
+                'phoneNumber': first_whatsapp.phone_number if first_whatsapp else settings_obj.whatsapp_phone_number,
+                'accessToken': settings_obj.whatsapp_access_token,
+                'phoneNumberId': first_whatsapp.phone_number_id if first_whatsapp else settings_obj.whatsapp_phone_number_id,
+                'businessId': first_whatsapp.business_id if first_whatsapp else settings_obj.whatsapp_business_id,
+                'templates': whatsapp_titles,
+            },
+            'gmailSenders': gmail_senders,
+            'whatsappSenders': whatsapp_senders,
+        }
+
+        response_serializer = AccountSettingsResponseSerializer(instance=response_payload)
+        return Response(response_serializer.data, status=HTTP_200_OK)
+
+    def put(self, request):
+        """PUT /api/account/settings/"""
+        settings_obj, _ = AccountSettings.objects.get_or_create(user=request.user)
+        serializer = AccountSettingsSerializer(settings_obj, data=request.data, partial=True)
+
+        if serializer.is_valid():
+            serializer.save(user=request.user)
+            return Response(serializer.data, status=HTTP_200_OK)
+
+        return Response(serializer.errors, status=HTTP_400_BAD_REQUEST)
+
+    def patch(self, request):
+        """PATCH /api/account/settings/"""
+        settings_obj, _ = AccountSettings.objects.get_or_create(user=request.user)
+        serializer = AccountSettingsSerializer(settings_obj, data=request.data, partial=True)
+
+        if serializer.is_valid():
+            serializer.save(user=request.user)
+            return Response(serializer.data, status=HTTP_200_OK)
+
+        return Response(serializer.errors, status=HTTP_400_BAD_REQUEST)
+
+
+class GmailSenderListCreateView(APIView):
+    """CRUD de remetentes Gmail no escopo de conta."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        """POST /api/account/gmail/senders/"""
+        serializer = GmailSenderSerializer(data=request.data)
+        if serializer.is_valid():
+            sender = serializer.save(user=request.user)
+            return Response(GmailSenderSerializer(sender).data, status=HTTP_201_CREATED)
+        return Response(serializer.errors, status=HTTP_400_BAD_REQUEST)
+
+
+class GmailSenderDetailView(APIView):
+    """Atualizar/deletar remetente Gmail."""
+    permission_classes = [IsAuthenticated]
+
+    def _get_sender(self, request, sender_id):
+        try:
+            return GmailSender.objects.get(id=sender_id, user=request.user)
+        except GmailSender.DoesNotExist:
+            return None
+
+    def put(self, request, sender_id):
+        """PUT /api/account/gmail/senders/<uuid:sender_id>/"""
+        sender = self._get_sender(request, sender_id)
+        if not sender:
+            return Response({'error': 'Remetente Gmail não encontrado'}, status=404)
+
+        serializer = GmailSenderSerializer(sender, data=request.data, partial=True)
+        if serializer.is_valid():
+            updated_sender = serializer.save()
+            return Response(GmailSenderSerializer(updated_sender).data, status=HTTP_200_OK)
+        return Response(serializer.errors, status=HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, sender_id):
+        """DELETE /api/account/gmail/senders/<uuid:sender_id>/"""
+        sender = self._get_sender(request, sender_id)
+        if not sender:
+            return Response({'error': 'Remetente Gmail não encontrado'}, status=404)
+        sender.delete()
+        return Response({'message': 'Remetente Gmail removido com sucesso'}, status=HTTP_200_OK)
+
+
+class GmailTemplateListCreateView(APIView):
+    """CRUD de templates Gmail por remetente."""
+    permission_classes = [IsAuthenticated]
+
+    def _get_sender(self, request, sender_id):
+        try:
+            return GmailSender.objects.get(id=sender_id, user=request.user)
+        except GmailSender.DoesNotExist:
+            return None
+
+    def post(self, request, sender_id):
+        """POST /api/account/gmail/senders/<uuid:sender_id>/templates/"""
+        sender = self._get_sender(request, sender_id)
+        if not sender:
+            return Response({'error': 'Remetente Gmail não encontrado'}, status=404)
+
+        serializer = GmailTemplateSerializer(data=request.data)
+        if serializer.is_valid():
+            template = serializer.save(sender=sender)
+            return Response(GmailTemplateSerializer(template).data, status=HTTP_201_CREATED)
+        return Response(serializer.errors, status=HTTP_400_BAD_REQUEST)
+
+
+class GmailTemplateDetailView(APIView):
+    """Atualizar/deletar template Gmail por remetente."""
+    permission_classes = [IsAuthenticated]
+
+    def _get_template(self, request, sender_id, template_id):
+        try:
+            sender = GmailSender.objects.get(id=sender_id, user=request.user)
+        except GmailSender.DoesNotExist:
+            return None
+
+        try:
+            return GmailTemplate.objects.get(id=template_id, sender=sender)
+        except GmailTemplate.DoesNotExist:
+            return None
+
+    def put(self, request, sender_id, template_id):
+        """PUT /api/account/gmail/senders/<uuid:sender_id>/templates/<uuid:template_id>/"""
+        template = self._get_template(request, sender_id, template_id)
+        if not template:
+            return Response({'error': 'Template Gmail não encontrado'}, status=404)
+
+        serializer = GmailTemplateSerializer(template, data=request.data, partial=True)
+        if serializer.is_valid():
+            updated_template = serializer.save()
+            return Response(GmailTemplateSerializer(updated_template).data, status=HTTP_200_OK)
+        return Response(serializer.errors, status=HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, sender_id, template_id):
+        """DELETE /api/account/gmail/senders/<uuid:sender_id>/templates/<uuid:template_id>/"""
+        template = self._get_template(request, sender_id, template_id)
+        if not template:
+            return Response({'error': 'Template Gmail não encontrado'}, status=404)
+        template.delete()
+        return Response({'message': 'Template Gmail removido com sucesso'}, status=HTTP_200_OK)
+
+
+class WhatsAppSenderListCreateView(APIView):
+    """CRUD de remetentes WhatsApp no escopo de conta."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        """POST /api/account/whatsapp/senders/"""
+        serializer = WhatsAppSenderSerializer(data=request.data)
+        if serializer.is_valid():
+            sender = serializer.save(user=request.user)
+            return Response(WhatsAppSenderSerializer(sender).data, status=HTTP_201_CREATED)
+        return Response(serializer.errors, status=HTTP_400_BAD_REQUEST)
+
+
+class WhatsAppSenderDetailView(APIView):
+    """Atualizar/deletar remetente WhatsApp."""
+    permission_classes = [IsAuthenticated]
+
+    def _get_sender(self, request, sender_id):
+        try:
+            return WhatsAppSender.objects.get(id=sender_id, user=request.user)
+        except WhatsAppSender.DoesNotExist:
+            return None
+
+    def put(self, request, sender_id):
+        """PUT /api/account/whatsapp/senders/<uuid:sender_id>/"""
+        sender = self._get_sender(request, sender_id)
+        if not sender:
+            return Response({'error': 'Remetente WhatsApp não encontrado'}, status=404)
+
+        serializer = WhatsAppSenderSerializer(sender, data=request.data, partial=True)
+        if serializer.is_valid():
+            updated_sender = serializer.save()
+            return Response(WhatsAppSenderSerializer(updated_sender).data, status=HTTP_200_OK)
+        return Response(serializer.errors, status=HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, sender_id):
+        """DELETE /api/account/whatsapp/senders/<uuid:sender_id>/"""
+        sender = self._get_sender(request, sender_id)
+        if not sender:
+            return Response({'error': 'Remetente WhatsApp não encontrado'}, status=404)
+        sender.delete()
+        return Response({'message': 'Remetente WhatsApp removido com sucesso'}, status=HTTP_200_OK)
+
+
+class WhatsAppTemplateListCreateView(APIView):
+    """CRUD de templates WhatsApp por remetente."""
+    permission_classes = [IsAuthenticated]
+
+    def _get_sender(self, request, sender_id):
+        try:
+            return WhatsAppSender.objects.get(id=sender_id, user=request.user)
+        except WhatsAppSender.DoesNotExist:
+            return None
+
+    def post(self, request, sender_id):
+        """POST /api/account/whatsapp/senders/<uuid:sender_id>/templates/"""
+        sender = self._get_sender(request, sender_id)
+        if not sender:
+            return Response({'error': 'Remetente WhatsApp não encontrado'}, status=404)
+
+        serializer = WhatsAppTemplateSerializer(data=request.data)
+        if serializer.is_valid():
+            template = serializer.save(sender=sender)
+            return Response(WhatsAppTemplateSerializer(template).data, status=HTTP_201_CREATED)
+        return Response(serializer.errors, status=HTTP_400_BAD_REQUEST)
+
+
+class WhatsAppTemplateDetailView(APIView):
+    """Atualizar/deletar template WhatsApp por remetente."""
+    permission_classes = [IsAuthenticated]
+
+    def _get_template(self, request, sender_id, template_id):
+        try:
+            sender = WhatsAppSender.objects.get(id=sender_id, user=request.user)
+        except WhatsAppSender.DoesNotExist:
+            return None
+
+        try:
+            return WhatsAppTemplate.objects.get(id=template_id, sender=sender)
+        except WhatsAppTemplate.DoesNotExist:
+            return None
+
+    def put(self, request, sender_id, template_id):
+        """PUT /api/account/whatsapp/senders/<uuid:sender_id>/templates/<uuid:template_id>/"""
+        template = self._get_template(request, sender_id, template_id)
+        if not template:
+            return Response({'error': 'Template WhatsApp não encontrado'}, status=404)
+
+        serializer = WhatsAppTemplateSerializer(template, data=request.data, partial=True)
+        if serializer.is_valid():
+            updated_template = serializer.save()
+            return Response(WhatsAppTemplateSerializer(updated_template).data, status=HTTP_200_OK)
+        return Response(serializer.errors, status=HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, sender_id, template_id):
+        """DELETE /api/account/whatsapp/senders/<uuid:sender_id>/templates/<uuid:template_id>/"""
+        template = self._get_template(request, sender_id, template_id)
+        if not template:
+            return Response({'error': 'Template WhatsApp não encontrado'}, status=404)
+        template.delete()
+        return Response({'message': 'Template WhatsApp removido com sucesso'}, status=HTTP_200_OK)

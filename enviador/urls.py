@@ -22,6 +22,7 @@ urlpatterns = [
     
     # API v1 URLs
     path('api/auth/', include('apps.auth_app.urls')),
+    path('api/account/', include('apps.auth_app.urls_account')),
     path('api/senders/', include('apps.senders.urls')),
     path('api/recipients/', include('apps.recipients.urls')),
     path('api/emails/', include('apps.emails.urls')),
