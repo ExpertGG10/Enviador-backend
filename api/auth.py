@@ -61,22 +61,6 @@ class LoginView(APIView):
     permission_classes = [AllowAny]
     
     def post(self, request):
-        """
-        POST /api/auth/login/
-        
-        Body:
-        {
-            "username": "joão",
-            "password": "senha123456"
-        }
-        
-        Response:
-        {
-            "token": "abc123xyz",
-            "user": {...},
-            "message": "Login realizado com sucesso"
-        }
-        """
         serializer = LoginSerializer(data=request.data)
         
         if serializer.is_valid():

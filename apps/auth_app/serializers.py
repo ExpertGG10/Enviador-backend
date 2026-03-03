@@ -5,6 +5,13 @@ from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
+from .models import (
+    AccountSettings,
+    GmailSender,
+    GmailTemplate,
+    WhatsAppSender,
+    WhatsAppTemplate,
+)
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -122,3 +129,150 @@ class ChangePasswordSerializer(serializers.Serializer):
                 'new_password': 'A nova senha deve ter pelo menos 8 caracteres.'
             })
         return data
+
+
+class AccountSettingsSerializer(serializers.ModelSerializer):
+    """Serializer para configurações da conta do usuário."""
+
+    class Meta:
+        model = AccountSettings
+        fields = (
+            'gmail_sender_email',
+            'gmail_app_password',
+            'whatsapp_phone_number',
+            'whatsapp_access_token',
+            'whatsapp_phone_number_id',
+            'whatsapp_business_id',
+            'whatsapp_templates',
+        )
+
+    def validate_whatsapp_templates(self, value):
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise serializers.ValidationError('whatsapp_templates deve ser um array de strings.')
+        if any(not isinstance(item, str) for item in value):
+            raise serializers.ValidationError('whatsapp_templates deve conter apenas strings.')
+        return value
+
+
+class GmailTemplateSerializer(serializers.ModelSerializer):
+    """Serializer para templates de Gmail."""
+
+    class Meta:
+        model = GmailTemplate
+        fields = ('id', 'title', 'subject', 'content')
+
+
+class GmailSenderSerializer(serializers.ModelSerializer):
+    """Serializer para remetentes de Gmail com templates."""
+
+    senderEmail = serializers.EmailField(source='sender_email')
+    appPassword = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    appPasswordMasked = serializers.SerializerMethodField(read_only=True)
+    templates = GmailTemplateSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = GmailSender
+        fields = ('id', 'senderEmail', 'appPassword', 'appPasswordMasked', 'templates')
+
+    def get_appPasswordMasked(self, obj):
+        if not obj.app_password_encrypted:
+            return ''
+        return '********'
+
+    def create(self, validated_data):
+        plain_password = validated_data.pop('appPassword', '')
+        sender = GmailSender(**validated_data)
+        if plain_password:
+            sender.set_app_password(plain_password)
+        sender.save()
+        return sender
+
+    def update(self, instance, validated_data):
+        plain_password = validated_data.pop('appPassword', None)
+        for key, value in validated_data.items():
+            setattr(instance, key, value)
+        if plain_password is not None:
+            instance.set_app_password(plain_password)
+        instance.save()
+        return instance
+
+
+class WhatsAppTemplateSerializer(serializers.ModelSerializer):
+    """Serializer para templates de WhatsApp."""
+
+    class Meta:
+        model = WhatsAppTemplate
+        fields = ('id', 'title', 'content')
+
+
+class WhatsAppSenderSerializer(serializers.ModelSerializer):
+    """Serializer para remetentes de WhatsApp com templates."""
+
+    phoneNumber = serializers.CharField(source='phone_number')
+    accessToken = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    accessTokenMasked = serializers.SerializerMethodField(read_only=True)
+    phoneNumberId = serializers.CharField(source='phone_number_id')
+    businessId = serializers.CharField(source='business_id')
+    templates = WhatsAppTemplateSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = WhatsAppSender
+        fields = (
+            'id',
+            'phoneNumber',
+            'accessToken',
+            'accessTokenMasked',
+            'phoneNumberId',
+            'businessId',
+            'templates',
+        )
+
+    def get_accessTokenMasked(self, obj):
+        if not obj.access_token_encrypted:
+            return ''
+        return '********'
+
+    def create(self, validated_data):
+        plain_token = validated_data.pop('accessToken', '')
+        sender = WhatsAppSender(**validated_data)
+        if plain_token:
+            sender.set_access_token(plain_token)
+        sender.save()
+        return sender
+
+    def update(self, instance, validated_data):
+        plain_token = validated_data.pop('accessToken', None)
+        for key, value in validated_data.items():
+            setattr(instance, key, value)
+        if plain_token is not None:
+            instance.set_access_token(plain_token)
+        instance.save()
+        return instance
+
+
+class AccountSettingsGmailCompatSerializer(serializers.Serializer):
+    """Bloco compatível de Gmail para resposta final de settings."""
+
+    senderEmail = serializers.CharField(allow_blank=True)
+    appPassword = serializers.CharField(allow_blank=True)
+
+
+class AccountSettingsWhatsAppCompatSerializer(serializers.Serializer):
+    """Bloco compatível de WhatsApp para resposta final de settings."""
+
+    phoneNumber = serializers.CharField(allow_blank=True)
+    accessToken = serializers.CharField(allow_blank=True)
+    phoneNumberId = serializers.CharField(allow_blank=True)
+    businessId = serializers.CharField(allow_blank=True)
+    templates = serializers.ListField(child=serializers.CharField(), default=list)
+
+
+class AccountSettingsResponseSerializer(serializers.Serializer):
+    """Contrato final de settings consumido pelo frontend."""
+
+    gmail = AccountSettingsGmailCompatSerializer()
+    whatsapp = AccountSettingsWhatsAppCompatSerializer()
+    gmailSenders = GmailSenderSerializer(many=True)
+    whatsappSenders = WhatsAppSenderSerializer(many=True)

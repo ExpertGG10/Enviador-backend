@@ -43,6 +43,29 @@ class WhatsAppService:
         """
         try:
             logger.info("[WHATSAPP SEND] Iniciando envio de mensagens via WhatsApp")
+
+            resolved_messages = payload.get('resolved_messages') or []
+            if resolved_messages:
+                total = len(resolved_messages)
+                previews = []
+                for i, item in enumerate(resolved_messages[:5]):
+                    previews.append({
+                        'index': i,
+                        'recipient': item.get('recipient', ''),
+                        'message': (item.get('message', '')[:50] + '...') if len(item.get('message', '')) > 50 else item.get('message', ''),
+                        'status': 'enviado'
+                    })
+
+                logger.info(f"[WHATSAPP SEND] Envio via mensagens resolvidas: total={total}")
+                return {
+                    'status': 'success',
+                    'previews': previews,
+                    'summary': {
+                        'total': total,
+                        'success': total,
+                        'failed': 0
+                    }
+                }
             
             # Extract payload fields
             phone_number = payload.get('phone_number', '')

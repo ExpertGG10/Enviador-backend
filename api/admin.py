@@ -2,7 +2,9 @@
 Django Admin configuration para models de email.
 """
 from django.contrib import admin
-from .models import Sender, Recipient, RecipientGroup, EmailLog
+from apps.senders.models import Sender
+from apps.recipients.models import Recipient, RecipientGroup
+from apps.emails.models import EmailLog
 
 
 @admin.register(Sender)
