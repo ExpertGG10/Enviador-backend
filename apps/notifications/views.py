@@ -2,6 +2,8 @@
 
 import json
 import os
+import unicodedata
+import requests
 from django.http import JsonResponse, HttpResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
@@ -63,15 +65,53 @@ def whatsapp_webhook_callback_view(request):
             message = value['messages'][0]
             phone_number_id = value.get('metadata', {}).get('phone_number_id')
             sender = message.get('from')
-            msg_body = (message.get('text') or {}).get('body')
+            msg_body = (message.get('text') or {}).get('body', '')
 
             logger.info(f'phone_number_id={phone_number_id}')
             logger.info(f'from={sender}')
             logger.info(f'message={msg_body}')
+
+            _send_whatsapp_reply(phone_number_id, sender, msg_body)
     except Exception:
         logger.exception('Erro ao extrair campos básicos do webhook WhatsApp')
 
     return JsonResponse({'status': 'received'}, status=200)
+
+
+def _normalize(text: str) -> str:
+    """Remove acentos e converte para minúsculas para comparação."""
+    return unicodedata.normalize('NFD', text).encode('ascii', 'ignore').decode('ascii').lower()
+
+
+def _send_whatsapp_reply(phone_number_id: str, to: str, received_body: str):
+    """Envia resposta automática via WhatsApp Cloud API."""
+    access_token = os.getenv('TOKEN')
+    if not access_token or not phone_number_id or not to:
+        logger.warning('Resposta automática ignorada: TOKEN, phone_number_id ou destinatário ausente')
+        return
+
+    reply_text = 'ola' if 'ola' in _normalize(received_body) else 'tchau'
+
+    url = f'https://graph.facebook.com/v22.0/{phone_number_id}/messages'
+    payload = {
+        'messaging_product': 'whatsapp',
+        'recipient_type': 'individual',
+        'to': to,
+        'type': 'text',
+        'text': {'preview_url': False, 'body': reply_text},
+    }
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': f'Bearer {access_token}',
+    }
+
+    try:
+        resp = requests.post(url, json=payload, headers=headers, timeout=10)
+        logger.info(f'Resposta enviada para {to}: "{reply_text}" | status={resp.status_code}')
+        if not resp.ok:
+            logger.warning(f'Erro na resposta automática: {resp.text}')
+    except requests.RequestException:
+        logger.exception('Falha ao enviar resposta automática WhatsApp')
 
 
 class WhatsAppTestView(APIView):
