@@ -2,7 +2,7 @@
 
 import json
 import os
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework.decorators import api_view, permission_classes
@@ -32,7 +32,7 @@ def whatsapp_webhook_callback_view(request):
 
         if hub_mode == 'subscribe' and hub_verify_token == verify_token and hub_challenge is not None:
             logger.info('Webhook WhatsApp verificado com sucesso')
-            return JsonResponse(hub_challenge, safe=False, status=200)
+            return HttpResponse(hub_challenge, content_type='text/plain', status=200)
 
         logger.warning('Falha na verificação do webhook WhatsApp')
         return JsonResponse({'error': 'Forbidden'}, status=403)
