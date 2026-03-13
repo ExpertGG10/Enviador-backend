@@ -90,7 +90,7 @@ def _send_whatsapp_reply(phone_number_id: str, to: str, received_body: str):
         logger.warning('Resposta automática ignorada: TOKEN, phone_number_id ou destinatário ausente')
         return
 
-    reply_text = 'ola' if 'ola' in _normalize(received_body) else 'tchau'
+    reply_text = 'ola' if 'ola' in _normalize(received_body) else 'Nem me deu ola'
 
     url = f'https://graph.facebook.com/v22.0/{phone_number_id}/messages'
     payload = {
