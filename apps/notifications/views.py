@@ -1,6 +1,7 @@
 """Views de Notificações e Webhooks."""
 
 import json
+import os
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
@@ -15,6 +16,62 @@ from .services import WhatsAppAPIService, WebhookHandlerService
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+@csrf_exempt
+@api_view(['GET', 'POST'])
+@permission_classes([AllowAny])
+def whatsapp_webhook_callback_view(request):
+    """Endpoint básico para verificação e recebimento de webhooks do WhatsApp Cloud API."""
+    if request.method == 'GET':
+        hub_mode = request.GET.get('hub.mode')
+        hub_challenge = request.GET.get('hub.challenge')
+        hub_verify_token = request.GET.get('hub.verify_token')
+
+        verify_token = os.getenv('WHATSAPP_VERIFY_TOKEN') or os.getenv('MYTOKEN', 'test_token_123')
+
+        if hub_mode == 'subscribe' and hub_verify_token == verify_token and hub_challenge is not None:
+            logger.info('Webhook WhatsApp verificado com sucesso')
+            return JsonResponse(hub_challenge, safe=False, status=200)
+
+        logger.warning('Falha na verificação do webhook WhatsApp')
+        return JsonResponse({'error': 'Forbidden'}, status=403)
+
+    try:
+        data = request.data if isinstance(request.data, dict) else {}
+    except Exception:
+        data = {}
+
+    if not data:
+        try:
+            data = json.loads(request.body.decode('utf-8') if request.body else '{}')
+        except Exception:
+            return JsonResponse({'error': 'Invalid JSON'}, status=400)
+
+    logger.info('Webhook WhatsApp recebido')
+    logger.info(json.dumps(data, ensure_ascii=False, indent=2))
+
+    try:
+        if (
+            data.get('entry')
+            and data['entry'][0].get('changes')
+            and data['entry'][0]['changes'][0].get('value')
+            and data['entry'][0]['changes'][0]['value'].get('messages')
+            and data['entry'][0]['changes'][0]['value']['messages'][0]
+        ):
+            value = data['entry'][0]['changes'][0]['value']
+            message = value['messages'][0]
+            phone_number_id = value.get('metadata', {}).get('phone_number_id')
+            sender = message.get('from')
+            msg_body = (message.get('text') or {}).get('body')
+
+            logger.info(f'phone_number_id={phone_number_id}')
+            logger.info(f'from={sender}')
+            logger.info(f'message={msg_body}')
+    except Exception:
+        logger.exception('Erro ao extrair campos básicos do webhook WhatsApp')
+
+    return JsonResponse({'status': 'received'}, status=200)
 
 
 class WhatsAppTestView(APIView):

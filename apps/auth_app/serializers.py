@@ -216,6 +216,12 @@ class GmailSenderSerializer(serializers.ModelSerializer):
         instance.save()
         return instance
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Mantemos compatibilidade com o formato legado, que já expõe appPassword no GET.
+        data['appPassword'] = instance.get_app_password() if instance.app_password_encrypted else ''
+        return data
+
 
 class WhatsAppTemplateSerializer(serializers.ModelSerializer):
     """Serializer para templates de WhatsApp."""

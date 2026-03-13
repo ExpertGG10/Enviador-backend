@@ -3,6 +3,7 @@
 from django.contrib import admin
 from django.urls import path, include
 from django.http import JsonResponse
+from apps.notifications.views import whatsapp_webhook_callback_view
 
 
 def root_health(request):
@@ -16,6 +17,8 @@ urlpatterns = [
     
     # Health check
     path('', root_health),
+    path('webhook', whatsapp_webhook_callback_view),
+    path('webhook/', whatsapp_webhook_callback_view),
     
     # API URLs (send, health checks, etc) - Include all api.* views
     path('api/', include('api.urls')),
