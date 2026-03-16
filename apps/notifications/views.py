@@ -87,6 +87,11 @@ def whatsapp_webhook_callback_view(request):
     logger.info(json.dumps(data, ensure_ascii=False, indent=2))
 
     try:
+        WebhookHandlerService.log_webhook_event(data)
+    except Exception:
+        logger.exception('Erro ao persistir evento do webhook WhatsApp')
+
+    try:
         if (
             data.get('entry')
             and data['entry'][0].get('changes')
