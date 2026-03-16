@@ -1,0 +1,39 @@
+﻿{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "950713500895823",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "554163470704",
+              "phone_number_id": "1012541245279634"
+            },
+            "contacts": [
+              {
+                "profile": {
+                  "name": "Gustavo Faria Cardoso"
+                },
+                "wa_id": "554197393566"
+              }
+            ],
+            "messages": [
+              {
+                "from": "554197393566",
+                "id": "wamid.HBgMNTU0MTk3MzkzNTY2FQIAEhgWM0VCMEEwRjg2N0ZBODYwOEJEMjExMgA=",
+                "timestamp": "1773680263",
+                "type": "text",
+                "text": {
+                  "body": "Ola"
+                }
+              }
+            ]
+          },
+          "field": "messages"
+        }
+      ]
+    }
+  ]
+}

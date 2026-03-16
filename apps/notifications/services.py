@@ -5,6 +5,14 @@ import requests
 import logging
 import json
 
+from .models import (
+    WhatsAppWebhookEvent,
+    WhatsAppWebhookEntry,
+    WhatsAppWebhookChange,
+    WhatsAppWebhookContact,
+    WhatsAppWebhookMessage,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -204,13 +212,61 @@ class WebhookHandlerService:
     
     @staticmethod
     def log_webhook_event(data):
-        """Log webhook event para auditoria."""
+        """Salva o evento bruto e entidades principais para consultas futuras."""
         try:
-            print(f"[WEBHOOK HANDLER LOG] Registrando evento de webhook em arquivo de log")
-            logger.info(f"[WEBHOOK HANDLER LOG] Salvando webhook event")
-            with open('/tmp/webhook_events.log', 'a') as f:
-                f.write(f"{json.dumps(data)}\n")
-            print(f"[WEBHOOK HANDLER LOG] ✓ Evento registrado com sucesso")
+            print('[WEBHOOK HANDLER LOG] Persistindo webhook no banco de dados')
+            logger.info('[WEBHOOK HANDLER LOG] Salvando webhook event no banco')
+
+            event = WhatsAppWebhookEvent.objects.create(
+                object_type=data.get('object', ''),
+                payload=data,
+            )
+
+            for entry_idx, entry_payload in enumerate(data.get('entry', [])):
+                entry = WhatsAppWebhookEntry.objects.create(
+                    event=event,
+                    entry_index=entry_idx,
+                    entry_id=str(entry_payload.get('id', '')),
+                    payload=entry_payload,
+                )
+
+                for change_idx, change_payload in enumerate(entry_payload.get('changes', [])):
+                    value = change_payload.get('value', {})
+                    metadata = value.get('metadata', {})
+                    change = WhatsAppWebhookChange.objects.create(
+                        entry=entry,
+                        change_index=change_idx,
+                        field=change_payload.get('field', ''),
+                        messaging_product=value.get('messaging_product', ''),
+                        display_phone_number=metadata.get('display_phone_number', ''),
+                        phone_number_id=metadata.get('phone_number_id', ''),
+                        payload=change_payload,
+                    )
+
+                    for contact_idx, contact_payload in enumerate(value.get('contacts', [])):
+                        WhatsAppWebhookContact.objects.create(
+                            change=change,
+                            contact_index=contact_idx,
+                            wa_id=str(contact_payload.get('wa_id', '')),
+                            profile_name=contact_payload.get('profile', {}).get('name', ''),
+                            payload=contact_payload,
+                        )
+
+                    for message_idx, message_payload in enumerate(value.get('messages', [])):
+                        text_content = (message_payload.get('text') or {}).get('body', '')
+                        msg_timestamp = message_payload.get('timestamp')
+                        WhatsAppWebhookMessage.objects.create(
+                            change=change,
+                            message_index=message_idx,
+                            whatsapp_message_id=message_payload.get('id', ''),
+                            from_wa_id=message_payload.get('from', ''),
+                            message_type=message_payload.get('type', ''),
+                            timestamp=int(msg_timestamp) if msg_timestamp else None,
+                            text_body=text_content,
+                            payload=message_payload,
+                        )
+
+            print(f'[WEBHOOK HANDLER LOG] OK Evento {event.id} registrado com sucesso')
         except Exception as e:
             logger.error(f"Erro ao registrar webhook: {str(e)}")
-            print(f"[WEBHOOK HANDLER LOG] ❌ Erro ao registrar evento: {str(e)}")
+            print(f"[WEBHOOK HANDLER LOG] ERRO ao registrar evento: {str(e)}")
