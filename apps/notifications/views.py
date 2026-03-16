@@ -3,6 +3,8 @@
 import json
 import os
 import unicodedata
+from collections import defaultdict
+from datetime import datetime, timezone
 import requests
 from django.http import JsonResponse, HttpResponse
 from django.views.decorators.http import require_http_methods
@@ -13,11 +15,42 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.status import HTTP_200_OK, HTTP_400_BAD_REQUEST
 
+from .models import WhatsAppWebhookMessage, WhatsAppWebhookContact
 from .services import WhatsAppAPIService, WebhookHandlerService
 
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_positive_int(value, default: int, maximum: int) -> int:
+    """Converte query param para inteiro positivo com limite maximo."""
+    try:
+        parsed = int(value)
+        if parsed < 1:
+            return default
+        return min(parsed, maximum)
+    except (TypeError, ValueError):
+        return default
+
+
+def _build_contact_name_map(wa_ids):
+    """Retorna o nome mais recente conhecido por wa_id."""
+    names_by_wa_id = {}
+    if not wa_ids:
+        return names_by_wa_id
+
+    contacts = (
+        WhatsAppWebhookContact.objects
+        .filter(wa_id__in=wa_ids)
+        .order_by('-id')
+    )
+
+    for contact in contacts:
+        if contact.wa_id not in names_by_wa_id and contact.profile_name:
+            names_by_wa_id[contact.wa_id] = contact.profile_name
+
+    return names_by_wa_id
 
 
 @csrf_exempt
@@ -203,3 +236,89 @@ def whatsapp_webhook_verify_view(request):
     
     logger.warning("Falha na verificação do webhook")
     return JsonResponse({'error': 'Forbidden'}, status=403)
+
+
+@require_http_methods(["GET"])
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def whatsapp_inbox_view(request):
+    """Endpoint de inbox para frontend com lista de conversas e timeline."""
+    wa_id_filter = request.GET.get('wa_id')
+    conversation_limit = _parse_positive_int(request.GET.get('conversation_limit'), default=20, maximum=100)
+    message_limit = _parse_positive_int(request.GET.get('message_limit'), default=50, maximum=200)
+
+    queryset = (
+        WhatsAppWebhookMessage.objects
+        .select_related('change__entry__event')
+        .order_by('-timestamp', '-created_at')
+    )
+    if wa_id_filter:
+        queryset = queryset.filter(from_wa_id=wa_id_filter)
+
+    raw_rows = list(queryset[: conversation_limit * message_limit])
+    rows = list(reversed(raw_rows))
+
+    conversations = defaultdict(list)
+    for msg in rows:
+        wa_id = msg.from_wa_id
+        iso_dt = datetime.fromtimestamp(msg.timestamp, tz=timezone.utc).isoformat() if msg.timestamp else None
+        conversations[wa_id].append({
+            'message_id': msg.whatsapp_message_id,
+            'type': msg.message_type,
+            'text': msg.text_body,
+            'timestamp': msg.timestamp,
+            'datetime_iso': iso_dt,
+            'direction': 'inbound',
+            'phone_number_id': msg.change.phone_number_id,
+            'display_phone_number': msg.change.display_phone_number,
+            'event_id': msg.change.entry.event_id,
+        })
+
+    wa_ids = list(conversations.keys())
+    contact_name_map = _build_contact_name_map(wa_ids)
+
+    conversation_list = []
+    timeline = []
+    for wa_id, items in conversations.items():
+        sorted_items = sorted(items, key=lambda i: (i['timestamp'] or 0, i['message_id']))[-message_limit:]
+        last_item = sorted_items[-1] if sorted_items else None
+
+        conversation_list.append({
+            'wa_id': wa_id,
+            'contact_name': contact_name_map.get(wa_id, 'Sem nome'),
+            'last_message': last_item['text'] if last_item else '',
+            'last_timestamp': last_item['datetime_iso'] if last_item else None,
+            'unread_count': len(sorted_items),
+        })
+        timeline.append({
+            'wa_id': wa_id,
+            'contact_name': contact_name_map.get(wa_id, 'Sem nome'),
+            'messages': sorted_items,
+        })
+
+    conversation_list = sorted(
+        conversation_list,
+        key=lambda c: c['last_timestamp'] or '',
+        reverse=True,
+    )[:conversation_limit]
+
+    ordered_wa_ids = [c['wa_id'] for c in conversation_list]
+    timeline = sorted(
+        timeline,
+        key=lambda block: ordered_wa_ids.index(block['wa_id']) if block['wa_id'] in ordered_wa_ids else 10**9,
+    )
+
+    payload = {
+        'ui_components': {
+            'conversation_list': conversation_list,
+            'message_timeline': timeline,
+            'stats': {
+                'loaded_messages': sum(len(t['messages']) for t in timeline),
+                'conversations': len(conversation_list),
+                'wa_id_filter': wa_id_filter,
+                'conversation_limit': conversation_limit,
+                'message_limit': message_limit,
+            },
+        }
+    }
+    return Response(payload, status=HTTP_200_OK)

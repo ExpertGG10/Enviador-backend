@@ -41,3 +41,14 @@ POST /api/send/
 
 ## Testes
 - python manage.py test
+
+## Banco local de testes
+- O projeto usa um banco separado para testes automatizados: `db_test.sqlite3`.
+- Para customizar, defina `TEST_DATABASE_URL` no ambiente (exemplo: `sqlite:///db_test.sqlite3`).
+- O banco de producao continua vindo de `DATABASE_URL`.
+
+Exemplo (PowerShell):
+```powershell
+$env:TEST_DATABASE_URL = "sqlite:///db_test.sqlite3"
+python manage.py test
+```
