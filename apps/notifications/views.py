@@ -15,7 +15,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.status import HTTP_200_OK, HTTP_400_BAD_REQUEST
 
-from .models import WhatsAppWebhookMessage, WhatsAppWebhookContact
+from .models import WhatsAppWebhookMessage, WhatsAppWebhookContact, WhatsAppOutboundMessage
 from .services import WhatsAppAPIService, WebhookHandlerService
 
 import logging
@@ -252,32 +252,61 @@ def whatsapp_inbox_view(request):
     conversation_limit = _parse_positive_int(request.GET.get('conversation_limit'), default=20, maximum=100)
     message_limit = _parse_positive_int(request.GET.get('message_limit'), default=50, maximum=200)
 
-    queryset = (
+    inbound_queryset = (
         WhatsAppWebhookMessage.objects
         .select_related('change__entry__event')
         .order_by('-timestamp', '-created_at')
     )
     if wa_id_filter:
-        queryset = queryset.filter(from_wa_id=wa_id_filter)
+        inbound_queryset = inbound_queryset.filter(from_wa_id=wa_id_filter)
 
-    raw_rows = list(queryset[: conversation_limit * message_limit])
-    rows = list(reversed(raw_rows))
+    outbound_queryset = WhatsAppOutboundMessage.objects.order_by('-created_at')
+    if wa_id_filter:
+        outbound_queryset = outbound_queryset.filter(to_wa_id=wa_id_filter)
 
-    conversations = defaultdict(list)
-    for msg in rows:
-        wa_id = msg.from_wa_id
-        iso_dt = datetime.fromtimestamp(msg.timestamp, tz=timezone.utc).isoformat() if msg.timestamp else None
-        conversations[wa_id].append({
+    inbound_rows = list(inbound_queryset[: conversation_limit * message_limit])
+    outbound_rows = list(outbound_queryset[: conversation_limit * message_limit])
+
+    unified_rows = []
+    for msg in inbound_rows:
+        unified_rows.append({
+            'wa_id': msg.from_wa_id,
             'message_id': msg.whatsapp_message_id,
             'type': msg.message_type,
             'text': msg.text_body,
             'timestamp': msg.timestamp,
-            'datetime_iso': iso_dt,
+            'datetime_iso': datetime.fromtimestamp(msg.timestamp, tz=timezone.utc).isoformat() if msg.timestamp else None,
             'direction': 'inbound',
             'phone_number_id': msg.change.phone_number_id,
             'display_phone_number': msg.change.display_phone_number,
             'event_id': msg.change.entry.event_id,
+            'sort_key': msg.timestamp or int(msg.created_at.timestamp()),
         })
+
+    for msg in outbound_rows:
+        outbound_ts = int(msg.created_at.timestamp())
+        unified_rows.append({
+            'wa_id': msg.to_wa_id,
+            'message_id': msg.whatsapp_message_id or f'local-{msg.id}',
+            'type': 'text',
+            'text': msg.text_body,
+            'timestamp': outbound_ts,
+            'datetime_iso': msg.created_at.astimezone(timezone.utc).isoformat(),
+            'direction': 'outbound',
+            'phone_number_id': msg.phone_number_id,
+            'display_phone_number': '',
+            'event_id': None,
+            'status': msg.status,
+            'sort_key': outbound_ts,
+        })
+
+    raw_rows = sorted(unified_rows, key=lambda r: (r['sort_key'], r['message_id']))[-(conversation_limit * message_limit):]
+    rows = list(raw_rows)
+
+    conversations = defaultdict(list)
+    for msg in rows:
+        wa_id = msg['wa_id']
+        conversations[wa_id].append(msg)
 
     wa_ids = list(conversations.keys())
     contact_name_map = _build_contact_name_map(wa_ids)
@@ -286,6 +315,7 @@ def whatsapp_inbox_view(request):
     timeline = []
     for wa_id, items in conversations.items():
         sorted_items = sorted(items, key=lambda i: (i['timestamp'] or 0, i['message_id']))[-message_limit:]
+        response_items = [{k: v for k, v in item.items() if k != 'sort_key'} for item in sorted_items]
         last_item = sorted_items[-1] if sorted_items else None
 
         conversation_list.append({
@@ -298,7 +328,7 @@ def whatsapp_inbox_view(request):
         timeline.append({
             'wa_id': wa_id,
             'contact_name': contact_name_map.get(wa_id, 'Sem nome'),
-            'messages': sorted_items,
+            'messages': response_items,
         })
 
     conversation_list = sorted(
@@ -327,3 +357,47 @@ def whatsapp_inbox_view(request):
         }
     }
     return Response(payload, status=HTTP_200_OK)
+
+
+@require_http_methods(["POST"])
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def whatsapp_send_text_view(request):
+    """Envia mensagem de texto para um numero WhatsApp e salva no historico."""
+    wa_id = str(request.data.get('wa_id', '')).strip()
+    text = str(request.data.get('text', '')).strip()
+
+    if not wa_id:
+        return Response({'error': 'wa_id é obrigatório'}, status=HTTP_400_BAD_REQUEST)
+    if not text:
+        return Response({'error': 'text é obrigatório'}, status=HTTP_400_BAD_REQUEST)
+
+    service = WhatsAppAPIService()
+    result = service.send_text_message(to_number=wa_id, message=text)
+
+    if not result.get('success'):
+        return Response(result, status=HTTP_400_BAD_REQUEST)
+
+    outbound = WhatsAppOutboundMessage.objects.create(
+        to_wa_id=wa_id,
+        text_body=text,
+        whatsapp_message_id=result.get('message_id', ''),
+        phone_number_id=service.phone_number_id,
+        status=result.get('status', 'sent'),
+        sent_by=request.user,
+        payload=result,
+    )
+
+    response_payload = {
+        'status': 'sent',
+        'message': {
+            'id': outbound.id,
+            'wa_id': outbound.to_wa_id,
+            'message_id': outbound.whatsapp_message_id,
+            'text': outbound.text_body,
+            'direction': 'outbound',
+            'datetime_iso': outbound.created_at.astimezone(timezone.utc).isoformat(),
+            'phone_number_id': outbound.phone_number_id,
+        }
+    }
+    return Response(response_payload, status=HTTP_200_OK)

@@ -110,3 +110,30 @@ class WhatsAppWebhookMessage(models.Model):
 
     def __str__(self):
         return f"{self.from_wa_id} -> {self.message_type} ({self.whatsapp_message_id})"
+
+
+class WhatsAppOutboundMessage(models.Model):
+    """Mensagem de texto enviada pelo sistema para um contato WhatsApp."""
+
+    to_wa_id = models.CharField(max_length=40, db_index=True)
+    text_body = models.TextField()
+    whatsapp_message_id = models.CharField(max_length=255, blank=True, db_index=True)
+    phone_number_id = models.CharField(max_length=80, blank=True)
+    status = models.CharField(max_length=40, default='sent')
+    sent_by = models.ForeignKey(
+        'auth.User',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='whatsapp_outbound_messages',
+    )
+    payload = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'WhatsApp Outbound Message'
+        verbose_name_plural = 'WhatsApp Outbound Messages'
+
+    def __str__(self):
+        return f"to {self.to_wa_id} ({self.whatsapp_message_id or 'pending-id'})"
