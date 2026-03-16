@@ -146,9 +146,42 @@ def _send_whatsapp_reply(phone_number_id: str, to: str, received_body: str):
     try:
         resp = requests.post(url, json=payload, headers=headers, timeout=10)
         logger.info(f'Resposta enviada para {to}: "{reply_text}" | status={resp.status_code}')
+        try:
+            response_payload = resp.json()
+        except ValueError:
+            response_payload = {'raw_text': resp.text}
+
+        status_value = 'sent' if resp.ok else 'failed'
+        whatsapp_message_id = ''
+        if resp.ok:
+            whatsapp_message_id = (
+                response_payload.get('messages', [{}])[0].get('id', '')
+                if isinstance(response_payload, dict)
+                else ''
+            )
+
+        WhatsAppOutboundMessage.objects.create(
+            to_wa_id=to,
+            text_body=reply_text,
+            whatsapp_message_id=whatsapp_message_id,
+            phone_number_id=phone_number_id,
+            status=status_value,
+            sent_by=None,
+            payload=response_payload if isinstance(response_payload, dict) else {'response': response_payload},
+        )
+
         if not resp.ok:
             logger.warning(f'Erro na resposta automática: {resp.text}')
-    except requests.RequestException:
+    except requests.RequestException as exc:
+        WhatsAppOutboundMessage.objects.create(
+            to_wa_id=to,
+            text_body=reply_text,
+            whatsapp_message_id='',
+            phone_number_id=phone_number_id,
+            status='failed',
+            sent_by=None,
+            payload={'error': str(exc)},
+        )
         logger.exception('Falha ao enviar resposta automática WhatsApp')
 
 
