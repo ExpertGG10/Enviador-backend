@@ -128,7 +128,7 @@ def _send_whatsapp_reply(phone_number_id: str, to: str, received_body: str):
         logger.warning('Resposta automática ignorada: TOKEN, phone_number_id ou destinatário ausente')
         return
 
-    reply_text = 'ola' if 'ola' in _normalize(received_body) else 'Nem me deu ola'
+    reply_text = 'teste correto'
 
     url = f'https://graph.facebook.com/v22.0/{phone_number_id}/messages'
     payload = {
@@ -142,47 +142,43 @@ def _send_whatsapp_reply(phone_number_id: str, to: str, received_body: str):
         'Content-Type': 'application/json',
         'Authorization': f'Bearer {access_token}',
     }
-
-    try:
-        resp = requests.post(url, json=payload, headers=headers, timeout=10)
-        logger.info(f'Resposta enviada para {to}: "{reply_text}" | status={resp.status_code}')
+    if 'teste' in _normalize(received_body):
         try:
-            response_payload = resp.json()
-        except ValueError:
-            response_payload = {'raw_text': resp.text}
+            resp = requests.post(url, json=payload, headers=headers, timeout=10)
+            logger.info(f'Resposta enviada para {to}: "{reply_text}" | status={resp.status_code}')
+            
+            # Salvar apenas se a mensagem foi enviada com sucesso
+            if resp.ok:
+                try:
+                    response_payload = resp.json()
+                except ValueError:
+                    response_payload = {'raw_text': resp.text}
 
-        status_value = 'sent' if resp.ok else 'failed'
-        whatsapp_message_id = ''
-        if resp.ok:
-            whatsapp_message_id = (
-                response_payload.get('messages', [{}])[0].get('id', '')
-                if isinstance(response_payload, dict)
-                else ''
-            )
+                whatsapp_message_id = (
+                    response_payload.get('messages', [{}])[0].get('id', '')
+                    if isinstance(response_payload, dict)
+                    else ''
+                )
 
-        WhatsAppOutboundMessage.objects.create(
-            to_wa_id=to,
-            text_body=reply_text,
-            whatsapp_message_id=whatsapp_message_id,
-            phone_number_id=phone_number_id,
-            status=status_value,
-            sent_by=None,
-            payload=response_payload if isinstance(response_payload, dict) else {'response': response_payload},
-        )
-
-        if not resp.ok:
-            logger.warning(f'Erro na resposta automática: {resp.text}')
-    except requests.RequestException as exc:
-        WhatsAppOutboundMessage.objects.create(
-            to_wa_id=to,
-            text_body=reply_text,
-            whatsapp_message_id='',
-            phone_number_id=phone_number_id,
-            status='failed',
-            sent_by=None,
-            payload={'error': str(exc)},
-        )
-        logger.exception('Falha ao enviar resposta automática WhatsApp')
+                WhatsAppOutboundMessage.objects.create(
+                    to_wa_id=to,
+                    text_body=reply_text,
+                    whatsapp_message_id=whatsapp_message_id,
+                    phone_number_id=phone_number_id,
+                    status='sent',
+                    sent_by=None,
+                    payload=response_payload if isinstance(response_payload, dict) else {'response': response_payload},
+                )
+            else:
+                # Erro na resposta - não salva, apenas registra no log
+                try:
+                    error_response = resp.json()
+                except ValueError:
+                    error_response = {'raw_text': resp.text}
+                logger.warning(f'Erro na resposta automática: {error_response}')
+        except requests.RequestException as exc:
+            # Erro de conexão - não salva, apenas registra no log
+            logger.exception(f'Falha ao enviar resposta automática WhatsApp para {to}: {str(exc)}')
 
 
 class WhatsAppTestView(APIView):
