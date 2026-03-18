@@ -55,6 +55,7 @@ MIDDLEWARE = [
 # CSRF Configuration - Exempt API endpoints from CSRF
 CSRF_TRUSTED_ORIGINS = [
     'https://enviador-backend-ca2c88a2ae88.herokuapp.com',
+    "https://aenvio-homologacao-a24d131db53c.herokuapp.com",
     'https://*.vercel.app',
     'http://localhost:5173',
     'http://localhost:5174',
