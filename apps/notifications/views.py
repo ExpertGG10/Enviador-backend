@@ -13,10 +13,11 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.status import HTTP_200_OK, HTTP_400_BAD_REQUEST
+from rest_framework.status import HTTP_200_OK, HTTP_400_BAD_REQUEST, HTTP_404_NOT_FOUND
 
 from .models import WhatsAppWebhookMessage, WhatsAppWebhookContact, WhatsAppOutboundMessage
 from .services import WhatsAppAPIService, WebhookHandlerService
+from apps.auth_app.models import WhatsAppSender
 
 import logging
 
@@ -395,14 +396,32 @@ def whatsapp_send_text_view(request):
     """Envia mensagem de texto para um numero WhatsApp e salva no historico."""
     wa_id = str(request.data.get('wa_id', '')).strip()
     text = str(request.data.get('text', '')).strip()
+    sender_id = request.data.get('sender_id')
 
     if not wa_id:
         return Response({'error': 'wa_id é obrigatório'}, status=HTTP_400_BAD_REQUEST)
     if not text:
         return Response({'error': 'text é obrigatório'}, status=HTTP_400_BAD_REQUEST)
+    if not sender_id:
+        return Response({'error': 'sender_id é obrigatório'}, status=HTTP_400_BAD_REQUEST)
 
+    # Buscar o remetente WhatsApp do usuário
+    try:
+        sender = WhatsAppSender.objects.get(id=sender_id, user=request.user)
+    except WhatsAppSender.DoesNotExist:
+        return Response(
+            {'error': 'Remetente WhatsApp não encontrado'},
+            status=HTTP_404_NOT_FOUND
+        )
+
+    # Chamar serviço passando as credenciais do remetente
     service = WhatsAppAPIService()
-    result = service.send_text_message(to_number=wa_id, message=text)
+    result = service.send_text_message(
+        to_number=wa_id,
+        message=text,
+        access_token=sender.get_access_token(),
+        phone_number_id=sender.phone_number_id
+    )
 
     if not result.get('success'):
         return Response(result, status=HTTP_400_BAD_REQUEST)
@@ -411,7 +430,7 @@ def whatsapp_send_text_view(request):
         to_wa_id=wa_id,
         text_body=text,
         whatsapp_message_id=result.get('message_id', ''),
-        phone_number_id=service.phone_number_id,
+        phone_number_id=sender.phone_number_id,
         status=result.get('status', 'sent'),
         sent_by=request.user,
         payload=result,

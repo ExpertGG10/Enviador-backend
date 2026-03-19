@@ -96,13 +96,39 @@ class WhatsAppAPIService:
                 'status': 'failed'
             }
     
-    def send_text_message(self, to_number: str, message: str):
-        """Enviar mensagem de texto simples."""
+    def send_text_message(self, to_number: str, message: str, access_token: str = None, phone_number_id: str = None):
+        """Enviar mensagem de texto simples.
+        
+        Args:
+            to_number: Número do destinatário
+            message: Conteúdo da mensagem
+            access_token: Token de acesso (opcional, usa instance se não fornecido)
+            phone_number_id: ID do número de telefone (opcional, usa instance se não fornecido)
+        """
         try:
             print(f"[WHATSAPP TEXT] Enviando mensagem de texto para: {to_number}")
             print(f"[WHATSAPP TEXT] Conteúdo: {message}")
             logger.info(f"[WHATSAPP TEXT] Enviando texto para: {to_number}")
-            url = f"{self.BASE_URL}/{self.phone_number_id}/messages"
+            
+            # Usar credenciais fornecidas ou do instance
+            token = access_token or self.access_token
+            phone_id = phone_number_id or self.phone_number_id
+            
+            # Validar configurações
+            if not token:
+                error_msg = "Access token não configurado."
+                print(f"[WHATSAPP TEXT] ❌ {error_msg}")
+                logger.error(error_msg)
+                return {'success': False, 'error': error_msg, 'status': 'failed'}
+            
+            if not phone_id:
+                error_msg = "Phone number ID não configurado."
+                print(f"[WHATSAPP TEXT] ❌ {error_msg}")
+                logger.error(error_msg)
+                return {'success': False, 'error': error_msg, 'status': 'failed'}
+            
+            url = f"{self.BASE_URL}/{phone_id}/messages"
+            print(f"[WHATSAPP TEXT] URL: {url}")
             
             payload = {
                 "messaging_product": "whatsapp",
@@ -112,7 +138,7 @@ class WhatsAppAPIService:
             }
             
             headers = {
-                "Authorization": f"Bearer {self.access_token}",
+                "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json"
             }
             
