@@ -252,27 +252,8 @@ class WhatsAppSenderSerializer(serializers.ModelSerializer):
         return instance
 
 
-class AccountSettingsGmailCompatSerializer(serializers.Serializer):
-    """Bloco compatível de Gmail para resposta final de settings."""
-
-    senderEmail = serializers.CharField(allow_blank=True)
-    appPassword = serializers.CharField(allow_blank=True)
-
-
-class AccountSettingsWhatsAppCompatSerializer(serializers.Serializer):
-    """Bloco compatível de WhatsApp para resposta final de settings."""
-
-    phoneNumber = serializers.CharField(allow_blank=True)
-    accessToken = serializers.CharField(allow_blank=True)
-    phoneNumberId = serializers.CharField(allow_blank=True)
-    businessId = serializers.CharField(allow_blank=True)
-    templates = serializers.ListField(child=serializers.CharField(), default=list)
-
-
-class AccountSettingsResponseSerializer(serializers.Serializer):
+class AccountSendersResponseSerializer(serializers.Serializer):
     """Contrato final de settings consumido pelo frontend."""
 
-    gmail = AccountSettingsGmailCompatSerializer()
-    whatsapp = AccountSettingsWhatsAppCompatSerializer()
     gmailSenders = GmailSenderSerializer(many=True)
     whatsappSenders = WhatsAppSenderSerializer(many=True)

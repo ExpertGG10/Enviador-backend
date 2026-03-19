@@ -10,25 +10,6 @@ from shared.utils.crypto import decrypt_password, encrypt_password
 # Sem modelos adicionais necessários nesta app
 
 
-class AccountSettings(models.Model):
-	"""Configurações de conta por usuário para envio de mensagens."""
-
-	user = models.OneToOneField(
-		User,
-		on_delete=models.CASCADE,
-		related_name='account_settings'
-	)
-	created_at = models.DateTimeField(auto_now_add=True)
-	updated_at = models.DateTimeField(auto_now=True)
-
-	class Meta:
-		verbose_name = 'Account Settings'
-		verbose_name_plural = 'Account Settings'
-
-	def __str__(self):
-		return f"AccountSettings({self.user.username})"
-
-
 class GmailSender(models.Model):
 	"""Remetente de Gmail por usuário."""
 

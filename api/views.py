@@ -61,7 +61,7 @@ def _sanitize_email_credentials(payload: dict) -> dict:
     return payload
 
 
-def _apply_account_settings_fallback(payload: dict, user):
+def _apply_sender_fallback(payload: dict, user):
     """Aplica fallback de credenciais por canal usando remetentes salvos do usuário."""
     channel = payload.get('channel', 'email')
     if channel not in ('email', 'whatsapp'):
@@ -289,13 +289,13 @@ def send_email_view(request):
 
     payload['channel'] = 'email'
     payload = _sanitize_email_credentials(payload)
-    payload = _apply_account_settings_fallback(payload, request.user)
+    payload = _apply_sender_fallback(payload, request.user)
     payload = _sanitize_email_credentials(payload)
     payload, sender_error = _resolve_email_sender_payload(payload, request.user)
     if sender_error is not None:
         return sender_error
 
-    credential_source = 'sender_id' if payload.get('sender_id') else 'payload_or_account_settings'
+    credential_source = 'sender_id' if payload.get('sender_id') else 'payload_or_saved_sender'
     logger.info(
         "[SEND_EMAIL] credential_source=%s sender_id=%s email_sender=%s app_password_len=%s",
         credential_source,
@@ -397,7 +397,7 @@ def send_whatsapp_view(request):
             return HttpResponseBadRequest('Invalid JSON')
 
     payload['channel'] = 'whatsapp'
-    payload = _apply_account_settings_fallback(payload, request.user)
+    payload = _apply_sender_fallback(payload, request.user)
 
     if payload.get('whatsapp_sender_id') or payload.get('whatsapp_template_title'):
         prepared_payload, error_response = _resolve_whatsapp_template_messages(payload, request.user)
@@ -481,7 +481,7 @@ def send_view(request):
     if channel not in ('email', 'whatsapp'):
         return JsonResponse({'error': 'Invalid channel'}, status=400)
 
-    payload = _apply_account_settings_fallback(payload, request.user)
+    payload = _apply_sender_fallback(payload, request.user)
 
     if channel == 'email':
         payload, sender_error = _resolve_email_sender_payload(payload, request.user)
@@ -646,7 +646,7 @@ def jobs_start_view(request):
         except json.JSONDecodeError:
             return HttpResponseBadRequest('Invalid JSON')
 
-    payload = _apply_account_settings_fallback(payload, request.user)
+    payload = _apply_sender_fallback(payload, request.user)
 
     channel = payload.get('channel', 'email')
     if channel not in ('email', 'whatsapp'):

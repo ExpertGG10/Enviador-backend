@@ -17,7 +17,7 @@ from .serializers import (
     UserRegisterSerializer,
     LoginSerializer,
     ChangePasswordSerializer,
-    AccountSettingsResponseSerializer,
+    AccountSendersResponseSerializer,
     GmailSenderSerializer,
     GmailTemplateSerializer,
     WhatsAppSenderSerializer,
@@ -199,19 +199,7 @@ class AccountSettingsView(APIView):
         gmail_senders = GmailSender.objects.filter(user=request.user).prefetch_related('templates').order_by('-created_at')
         whatsapp_senders = WhatsAppSender.objects.filter(user=request.user).prefetch_related('templates').order_by('-created_at')
 
-        # Campos legados mantidos apenas por compatibilidade, sempre vazios.
         return {
-            'gmail': {
-                'senderEmail': '',
-                'appPassword': '',
-            },
-            'whatsapp': {
-                'phoneNumber': '',
-                'accessToken': '',
-                'phoneNumberId': '',
-                'businessId': '',
-                'templates': [],
-            },
             'gmailSenders': gmail_senders,
             'whatsappSenders': whatsapp_senders,
         }
@@ -252,7 +240,7 @@ class AccountSettingsView(APIView):
         """GET /api/account/settings/"""
         response_payload = self._build_response_payload(request)
 
-        response_serializer = AccountSettingsResponseSerializer(instance=response_payload)
+        response_serializer = AccountSendersResponseSerializer(instance=response_payload)
         return Response(response_serializer.data, status=HTTP_200_OK)
 
     def put(self, request):
@@ -270,7 +258,7 @@ class AccountSettingsView(APIView):
             return Response({'error': str(exc)}, status=HTTP_400_BAD_REQUEST)
 
         response_payload = self._build_response_payload(request)
-        response_serializer = AccountSettingsResponseSerializer(instance=response_payload)
+        response_serializer = AccountSendersResponseSerializer(instance=response_payload)
         return Response(response_serializer.data, status=HTTP_200_OK)
 
     def patch(self, request):
