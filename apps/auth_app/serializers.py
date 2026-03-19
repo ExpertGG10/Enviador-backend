@@ -192,8 +192,8 @@ class GmailSenderSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        # Mantemos compatibilidade com o formato legado, que já expõe appPassword no GET.
-        data['appPassword'] = instance.get_app_password() if instance.app_password_encrypted else ''
+        # Retorna senha mascarada por segurança - cliente não deve receber senha descriptografada
+        data['appPassword'] = self.get_appPasswordMasked(instance)
         return data
 
 
@@ -253,7 +253,8 @@ class WhatsAppSenderSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        data['accessToken'] = instance.get_access_token() if instance.access_token_encrypted else ''
+        # Retorna token mascarado por segurança - cliente não deve receber token descriptografado
+        data['accessToken'] = self.get_accessTokenMasked(instance)
         return data
 
 
