@@ -6,7 +6,6 @@ from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from .models import (
-    AccountSettings,
     GmailSender,
     GmailTemplate,
     WhatsAppSender,
@@ -145,31 +144,6 @@ class ChangePasswordSerializer(serializers.Serializer):
                 'new_password': 'A nova senha deve ter pelo menos 8 caracteres.'
             })
         return data
-
-
-class AccountSettingsSerializer(serializers.ModelSerializer):
-    """Serializer para configurações da conta do usuário."""
-
-    class Meta:
-        model = AccountSettings
-        fields = (
-            'gmail_sender_email',
-            'gmail_app_password',
-            'whatsapp_phone_number',
-            'whatsapp_access_token',
-            'whatsapp_phone_number_id',
-            'whatsapp_business_id',
-            'whatsapp_templates',
-        )
-
-    def validate_whatsapp_templates(self, value):
-        if value is None:
-            return []
-        if not isinstance(value, list):
-            raise serializers.ValidationError('whatsapp_templates deve ser um array de strings.')
-        if any(not isinstance(item, str) for item in value):
-            raise serializers.ValidationError('whatsapp_templates deve conter apenas strings.')
-        return value
 
 
 class GmailTemplateSerializer(serializers.ModelSerializer):

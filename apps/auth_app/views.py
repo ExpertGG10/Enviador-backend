@@ -17,7 +17,6 @@ from .serializers import (
     UserRegisterSerializer,
     LoginSerializer,
     ChangePasswordSerializer,
-    AccountSettingsSerializer,
     AccountSettingsResponseSerializer,
     GmailSenderSerializer,
     GmailTemplateSerializer,
@@ -26,12 +25,12 @@ from .serializers import (
 )
 from .services import AuthService
 from .models import (
-    AccountSettings,
     GmailSender,
     GmailTemplate,
     WhatsAppSender,
     WhatsAppTemplate,
 )
+from django.db import transaction
 
 
 class HealthView(APIView):
@@ -196,62 +195,87 @@ class AccountSettingsView(APIView):
     """Endpoint para obter/atualizar configurações da conta do usuário autenticado."""
     permission_classes = [IsAuthenticated]
 
-    def get(self, request):
-        """GET /api/account/settings/"""
-        settings_obj, _ = AccountSettings.objects.get_or_create(user=request.user)
-
+    def _build_response_payload(self, request):
         gmail_senders = GmailSender.objects.filter(user=request.user).prefetch_related('templates').order_by('-created_at')
         whatsapp_senders = WhatsAppSender.objects.filter(user=request.user).prefetch_related('templates').order_by('-created_at')
 
-        first_gmail = gmail_senders.first()
-        first_whatsapp = whatsapp_senders.first()
-
-        whatsapp_titles = []
-        if first_whatsapp:
-            whatsapp_titles = list(first_whatsapp.templates.order_by('title').values_list('title', flat=True))
-        elif settings_obj.whatsapp_templates:
-            whatsapp_titles = settings_obj.whatsapp_templates
-
-        response_payload = {
+        # Campos legados mantidos apenas por compatibilidade, sempre vazios.
+        return {
             'gmail': {
-                'senderEmail': first_gmail.sender_email if first_gmail else settings_obj.gmail_sender_email,
-                'appPassword': settings_obj.gmail_app_password,
+                'senderEmail': '',
+                'appPassword': '',
             },
             'whatsapp': {
-                'phoneNumber': first_whatsapp.phone_number if first_whatsapp else settings_obj.whatsapp_phone_number,
-                'accessToken': settings_obj.whatsapp_access_token,
-                'phoneNumberId': first_whatsapp.phone_number_id if first_whatsapp else settings_obj.whatsapp_phone_number_id,
-                'businessId': first_whatsapp.business_id if first_whatsapp else settings_obj.whatsapp_business_id,
-                'templates': whatsapp_titles,
+                'phoneNumber': '',
+                'accessToken': '',
+                'phoneNumberId': '',
+                'businessId': '',
+                'templates': [],
             },
             'gmailSenders': gmail_senders,
             'whatsappSenders': whatsapp_senders,
         }
+
+    def _sync_sender_list(self, request, items, model_cls, serializer_cls):
+        if items is None:
+            return
+
+        if not isinstance(items, list):
+            raise ValueError('Formato inválido: esperado array de remetentes.')
+
+        existing = model_cls.objects.filter(user=request.user)
+        existing_by_id = {str(obj.id): obj for obj in existing}
+        keep_ids = []
+
+        for item in items:
+            if not isinstance(item, dict):
+                raise ValueError('Formato inválido: cada remetente deve ser um objeto.')
+
+            sender_id = str(item.get('id', '')).strip()
+            if sender_id and sender_id in existing_by_id:
+                serializer = serializer_cls(existing_by_id[sender_id], data=item, partial=True)
+                serializer.is_valid(raise_exception=True)
+                updated = serializer.save()
+                keep_ids.append(str(updated.id))
+            else:
+                serializer = serializer_cls(data=item)
+                serializer.is_valid(raise_exception=True)
+                created = serializer.save(user=request.user)
+                keep_ids.append(str(created.id))
+
+        if keep_ids:
+            model_cls.objects.filter(user=request.user).exclude(id__in=keep_ids).delete()
+        else:
+            model_cls.objects.filter(user=request.user).delete()
+
+    def get(self, request):
+        """GET /api/account/settings/"""
+        response_payload = self._build_response_payload(request)
 
         response_serializer = AccountSettingsResponseSerializer(instance=response_payload)
         return Response(response_serializer.data, status=HTTP_200_OK)
 
     def put(self, request):
         """PUT /api/account/settings/"""
-        settings_obj, _ = AccountSettings.objects.get_or_create(user=request.user)
-        serializer = AccountSettingsSerializer(settings_obj, data=request.data, partial=True)
+        gmail_senders = request.data.get('gmailSenders')
+        whatsapp_senders = request.data.get('whatsappSenders')
 
-        if serializer.is_valid():
-            serializer.save(user=request.user)
-            return Response(serializer.data, status=HTTP_200_OK)
+        try:
+            with transaction.atomic():
+                self._sync_sender_list(request, gmail_senders, GmailSender, GmailSenderSerializer)
+                self._sync_sender_list(request, whatsapp_senders, WhatsAppSender, WhatsAppSenderSerializer)
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=HTTP_400_BAD_REQUEST)
+        except Exception as exc:
+            return Response({'error': str(exc)}, status=HTTP_400_BAD_REQUEST)
 
-        return Response(serializer.errors, status=HTTP_400_BAD_REQUEST)
+        response_payload = self._build_response_payload(request)
+        response_serializer = AccountSettingsResponseSerializer(instance=response_payload)
+        return Response(response_serializer.data, status=HTTP_200_OK)
 
     def patch(self, request):
         """PATCH /api/account/settings/"""
-        settings_obj, _ = AccountSettings.objects.get_or_create(user=request.user)
-        serializer = AccountSettingsSerializer(settings_obj, data=request.data, partial=True)
-
-        if serializer.is_valid():
-            serializer.save(user=request.user)
-            return Response(serializer.data, status=HTTP_200_OK)
-
-        return Response(serializer.errors, status=HTTP_400_BAD_REQUEST)
+        return self.put(request)
 
 
 class GmailSenderListCreateView(APIView):

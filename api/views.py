@@ -11,7 +11,7 @@ from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from django.http import JsonResponse
 import threading
-from apps.auth_app.models import AccountSettings, GmailSender, WhatsAppSender, WhatsAppTemplate
+from apps.auth_app.models import GmailSender, WhatsAppSender, WhatsAppTemplate
 import logging
 
 # job manager for background runs
@@ -62,33 +62,32 @@ def _sanitize_email_credentials(payload: dict) -> dict:
 
 
 def _apply_account_settings_fallback(payload: dict, user):
-    """Aplica fallback de credenciais por canal usando AccountSettings do usuário."""
+    """Aplica fallback de credenciais por canal usando remetentes salvos do usuário."""
     channel = payload.get('channel', 'email')
     if channel not in ('email', 'whatsapp'):
         return payload
 
-    try:
-        account_settings = AccountSettings.objects.get(user=user)
-    except AccountSettings.DoesNotExist:
-        return payload
-
     if channel == 'email':
-        if not payload.get('email_sender') and account_settings.gmail_sender_email:
-            payload['email_sender'] = account_settings.gmail_sender_email
-        if not payload.get('app_password') and account_settings.gmail_app_password:
-            payload['app_password'] = account_settings.gmail_app_password
+        sender = GmailSender.objects.filter(user=user).order_by('-created_at').first()
+        if sender:
+            if not payload.get('email_sender'):
+                payload['email_sender'] = sender.sender_email
+            if not payload.get('app_password'):
+                payload['app_password'] = sender.get_app_password()
         return payload
 
-    if not payload.get('whatsapp_access_token') and account_settings.whatsapp_access_token:
-        payload['whatsapp_access_token'] = account_settings.whatsapp_access_token
-    if not payload.get('whatsapp_phone_number_id') and account_settings.whatsapp_phone_number_id:
-        payload['whatsapp_phone_number_id'] = account_settings.whatsapp_phone_number_id
-    if not payload.get('whatsapp_business_id') and account_settings.whatsapp_business_id:
-        payload['whatsapp_business_id'] = account_settings.whatsapp_business_id
-    if not payload.get('phone_number') and account_settings.whatsapp_phone_number:
-        payload['phone_number'] = account_settings.whatsapp_phone_number
-    if not payload.get('whatsapp_templates') and account_settings.whatsapp_templates:
-        payload['whatsapp_templates'] = account_settings.whatsapp_templates
+    sender = WhatsAppSender.objects.filter(user=user).prefetch_related('templates').order_by('-created_at').first()
+    if sender:
+        if not payload.get('whatsapp_access_token'):
+            payload['whatsapp_access_token'] = sender.get_access_token()
+        if not payload.get('whatsapp_phone_number_id'):
+            payload['whatsapp_phone_number_id'] = sender.phone_number_id
+        if not payload.get('whatsapp_business_id'):
+            payload['whatsapp_business_id'] = sender.business_id
+        if not payload.get('phone_number'):
+            payload['phone_number'] = sender.phone_number
+        if not payload.get('whatsapp_templates'):
+            payload['whatsapp_templates'] = list(sender.templates.order_by('title').values_list('title', flat=True))
     return payload
 
 
@@ -216,7 +215,7 @@ def _resolve_email_sender_payload(payload: dict, user):
     payload['email_sender'] = gmail_sender.sender_email
     try:
         # Com sender_id, a fonte de verdade da credencial é o remetente salvo.
-        # Isso evita uso acidental de fallback (AccountSettings) desatualizado.
+        # Isso evita uso acidental de fallback legado desatualizado.
         payload['app_password'] = gmail_sender.get_app_password()
     except Exception:
         return None, JsonResponse({'error': 'Unable to decrypt app password for sender_id'}, status=400)

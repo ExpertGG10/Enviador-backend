@@ -18,13 +18,6 @@ class AccountSettings(models.Model):
 		on_delete=models.CASCADE,
 		related_name='account_settings'
 	)
-	gmail_sender_email = models.EmailField(blank=True, default='')
-	gmail_app_password = models.CharField(max_length=255, blank=True, default='')
-	whatsapp_phone_number = models.CharField(max_length=32, blank=True, default='')
-	whatsapp_access_token = models.TextField(blank=True, default='')
-	whatsapp_phone_number_id = models.CharField(max_length=64, blank=True, default='')
-	whatsapp_business_id = models.CharField(max_length=64, blank=True, default='')
-	whatsapp_templates = models.JSONField(default=list, blank=True)
 	created_at = models.DateTimeField(auto_now_add=True)
 	updated_at = models.DateTimeField(auto_now=True)
 
