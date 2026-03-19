@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 class WhatsAppAPIService:
     """Serviço para integração com API do WhatsApp/Meta."""
     
-    BASE_URL = 'https://graph.instagram.com/v18.0'
+    BASE_URL = 'https://graph.facebook.com/v22.0'
     
     def __init__(self):
         self.access_token = os.getenv('WHATSAPP_ACCESS_TOKEN', '')
