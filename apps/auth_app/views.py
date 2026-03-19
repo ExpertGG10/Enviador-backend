@@ -204,7 +204,49 @@ class AccountSettingsView(APIView):
             'whatsappSenders': whatsapp_senders,
         }
 
-    def _sync_sender_list(self, request, items, model_cls, serializer_cls):
+    def _sync_templates(self, sender, templates_data, template_model_cls, template_serializer_cls):
+        """Sincroniza templates aninhados de um sender."""
+        if not templates_data:
+            template_model_cls.objects.filter(sender=sender).delete()
+            return
+
+        if not isinstance(templates_data, list):
+            raise ValueError('Formato inválido: templates deve ser um array.')
+
+        existing_templates = template_model_cls.objects.filter(sender=sender)
+        existing_by_id = {str(obj.id): obj for obj in existing_templates}
+        keep_template_ids = []
+
+        for template_item in templates_data:
+            if not isinstance(template_item, dict):
+                raise ValueError('Formato inválido: cada template deve ser um objeto.')
+
+            template_id = str(template_item.get('id', '')).strip()
+            
+            # Template com ID existente → atualizar
+            if template_id and template_id in existing_by_id:
+                template_serializer = template_serializer_cls(
+                    existing_by_id[template_id],
+                    data=template_item,
+                    partial=True
+                )
+                template_serializer.is_valid(raise_exception=True)
+                updated_template = template_serializer.save()
+                keep_template_ids.append(str(updated_template.id))
+            # Novo template (sem ID ou ID não existe) → criar
+            else:
+                template_serializer = template_serializer_cls(data=template_item)
+                template_serializer.is_valid(raise_exception=True)
+                created_template = template_serializer.save(sender=sender)
+                keep_template_ids.append(str(created_template.id))
+
+        # Deletar templates não mencionados
+        if keep_template_ids:
+            template_model_cls.objects.filter(sender=sender).exclude(id__in=keep_template_ids).delete()
+        else:
+            template_model_cls.objects.filter(sender=sender).delete()
+
+    def _sync_sender_list(self, request, items, model_cls, serializer_cls, template_model_cls=None, template_serializer_cls=None):
         if items is None:
             return
 
@@ -219,17 +261,26 @@ class AccountSettingsView(APIView):
             if not isinstance(item, dict):
                 raise ValueError('Formato inválido: cada remetente deve ser um objeto.')
 
+            # Extrair templates do payload antes de passar ao serializer (pois é read-only)
+            templates_data = item.pop('templates', None)
+            
             sender_id = str(item.get('id', '')).strip()
             if sender_id and sender_id in existing_by_id:
                 serializer = serializer_cls(existing_by_id[sender_id], data=item, partial=True)
                 serializer.is_valid(raise_exception=True)
                 updated = serializer.save()
                 keep_ids.append(str(updated.id))
+                sender = updated
             else:
                 serializer = serializer_cls(data=item)
                 serializer.is_valid(raise_exception=True)
                 created = serializer.save(user=request.user)
                 keep_ids.append(str(created.id))
+                sender = created
+
+            # Sincronizar templates aninhados se fornecido
+            if template_model_cls and template_serializer_cls and templates_data is not None:
+                self._sync_templates(sender, templates_data, template_model_cls, template_serializer_cls)
 
         if keep_ids:
             model_cls.objects.filter(user=request.user).exclude(id__in=keep_ids).delete()
@@ -250,8 +301,22 @@ class AccountSettingsView(APIView):
 
         try:
             with transaction.atomic():
-                self._sync_sender_list(request, gmail_senders, GmailSender, GmailSenderSerializer)
-                self._sync_sender_list(request, whatsapp_senders, WhatsAppSender, WhatsAppSenderSerializer)
+                self._sync_sender_list(
+                    request,
+                    gmail_senders,
+                    GmailSender,
+                    GmailSenderSerializer,
+                    template_model_cls=GmailTemplate,
+                    template_serializer_cls=GmailTemplateSerializer
+                )
+                self._sync_sender_list(
+                    request,
+                    whatsapp_senders,
+                    WhatsAppSender,
+                    WhatsAppSenderSerializer,
+                    template_model_cls=WhatsAppTemplate,
+                    template_serializer_cls=WhatsAppTemplateSerializer
+                )
         except ValueError as exc:
             return Response({'error': str(exc)}, status=HTTP_400_BAD_REQUEST)
         except Exception as exc:
