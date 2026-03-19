@@ -251,6 +251,11 @@ class WhatsAppSenderSerializer(serializers.ModelSerializer):
         instance.save()
         return instance
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['accessToken'] = instance.get_access_token() if instance.access_token_encrypted else ''
+        return data
+
 
 class AccountSendersResponseSerializer(serializers.Serializer):
     """Contrato final de settings consumido pelo frontend."""
