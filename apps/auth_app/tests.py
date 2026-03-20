@@ -75,7 +75,6 @@ class AccountSettingsTemplateSyncTests(TestCase):
         self.template = WhatsAppTemplate.objects.create(
             sender=self.sender,
             title='envio_de_notas_fiscais',
-            content='',
         )
 
     def test_settings_put_upserts_template_by_name_without_id(self):
@@ -125,4 +124,3 @@ class AccountSettingsTemplateSyncTests(TestCase):
         templates = list(WhatsAppTemplate.objects.filter(sender=self.sender).order_by('title'))
         self.assertEqual(len(templates), 1)
         self.assertEqual(templates[0].title, 'boleto_vencendo')
-        self.assertEqual(templates[0].content, '')
