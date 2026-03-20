@@ -219,15 +219,7 @@ class AccountSettingsView(APIView):
         keep_template_ids = []
 
         for template_item in templates_data:
-            if isinstance(template_item, str):
-                template_item = {'title': template_item}
-            elif isinstance(template_item, dict):
-                template_item = dict(template_item)
-            else:
-                raise ValueError('Formato inválido: cada template deve ser um objeto ou string.')
-
-            if not template_item.get('title') and template_item.get('name'):
-                template_item['title'] = template_item.get('name')
+            template_item = self._normalize_template_item(template_item, template_model_cls)
 
             template_id = str(template_item.get('id', '')).strip()
             template_title = str(template_item.get('title', '')).strip()
@@ -264,6 +256,23 @@ class AccountSettingsView(APIView):
             template_model_cls.objects.filter(sender=sender).exclude(id__in=keep_template_ids).delete()
         else:
             template_model_cls.objects.filter(sender=sender).delete()
+
+    def _normalize_template_item(self, template_item, template_model_cls):
+        if isinstance(template_item, str):
+            normalized_item = {'title': template_item}
+        elif isinstance(template_item, dict):
+            normalized_item = dict(template_item)
+        else:
+            raise ValueError('Formato inválido: cada template deve ser um objeto ou string.')
+
+        if template_model_cls is WhatsAppTemplate:
+            template_name = normalized_item.get('name') or normalized_item.get('title')
+            normalized_item = {'id': normalized_item.get('id'), 'name': template_name}
+
+        if not normalized_item.get('title') and normalized_item.get('name'):
+            normalized_item['title'] = normalized_item.get('name')
+
+        return normalized_item
 
     def _sync_sender_list(self, request, items, model_cls, serializer_cls, template_model_cls=None, template_serializer_cls=None):
         if items is None:

@@ -96,3 +96,33 @@ class AccountSettingsTemplateSyncTests(TestCase):
         templates = WhatsAppTemplate.objects.filter(sender=self.sender)
         self.assertEqual(templates.count(), 1)
         self.assertEqual(templates.first().title, 'envio_de_notas_fiscais')
+
+    def test_settings_put_ignores_complex_whatsapp_template_fields_and_keeps_only_name(self):
+        payload = {
+            'whatsappSenders': [
+                {
+                    'id': str(self.sender.id),
+                    'templates': [
+                        {
+                            'name': 'boleto_vencendo',
+                            'language': 'pt_BR',
+                            'category': 'UTILITY',
+                            'components': [
+                                {
+                                    'type': 'BODY',
+                                    'text': 'Seu boleto vence amanhã.'
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+
+        response = self.client.put('/api/account/settings/', payload, format='json')
+        self.assertEqual(response.status_code, HTTP_200_OK)
+
+        templates = list(WhatsAppTemplate.objects.filter(sender=self.sender).order_by('title'))
+        self.assertEqual(len(templates), 1)
+        self.assertEqual(templates[0].title, 'boleto_vencendo')
+        self.assertEqual(templates[0].content, '')
