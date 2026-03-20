@@ -100,9 +100,13 @@ def _resolve_whatsapp_template_messages(payload: dict, user):
     if not sender_id:
         return None, JsonResponse({'error': 'whatsapp_sender_id is required for WhatsApp channel'}, status=400)
 
-    template_title = payload.get('whatsapp_template_title')
-    if not template_title:
-        return None, JsonResponse({'error': 'whatsapp_template_title is required for WhatsApp channel'}, status=400)
+    template_name = payload.get('whatsapp_template_name') or payload.get('whatsapp_template_title')
+    if not template_name:
+        return None, JsonResponse({'error': 'whatsapp_template_name is required for WhatsApp channel'}, status=400)
+
+    template_name = str(template_name).strip()
+    if not template_name:
+        return None, JsonResponse({'error': 'whatsapp_template_name is required for WhatsApp channel'}, status=400)
 
     contact_column = payload.get('contact_column')
     if not contact_column:
@@ -118,46 +122,20 @@ def _resolve_whatsapp_template_messages(payload: dict, user):
         return None, JsonResponse({'error': 'WhatsApp sender not found'}, status=404)
 
     try:
-        template = WhatsAppTemplate.objects.get(sender=sender, title=template_title)
+        template = WhatsAppTemplate.objects.get(sender=sender, title=template_name)
     except WhatsAppTemplate.DoesNotExist:
         return None, JsonResponse({'error': 'WhatsApp template not found for this sender'}, status=404)
 
-    variables = _extract_template_variables(template.content)
     mapping_list = payload.get('whatsapp_template_variables', [])
-    mapping_by_variable = {}
-    if isinstance(mapping_list, list):
-        for item in mapping_list:
-            if isinstance(item, dict) and item.get('variable'):
-                mapping_by_variable[item.get('variable')] = item
+    if mapping_list is None:
+        mapping_list = []
+    if not isinstance(mapping_list, list):
+        return None, JsonResponse({'error': 'whatsapp_template_variables must be an array'}, status=400)
 
-    for variable in variables:
-        mapping = mapping_by_variable.get(variable)
-        if not mapping:
-            return None, JsonResponse(
-                {'error': f'Missing mapping for variable "{variable}"', 'variable': variable},
-                status=400
-            )
-
-        mode = mapping.get('mode')
-        if mode not in ('column', 'fixed'):
-            return None, JsonResponse(
-                {'error': f'Invalid mode for variable "{variable}". Use "column" or "fixed"'},
-                status=400
-            )
-
-        if mode == 'column' and not mapping.get('column'):
-            return None, JsonResponse(
-                {'error': f'column is required for variable "{variable}" when mode=column'},
-                status=400
-            )
-
-        if mode == 'fixed' and (mapping.get('value') is None or str(mapping.get('value')).strip() == ''):
-            return None, JsonResponse(
-                {'error': f'value is required for variable "{variable}" when mode=fixed'},
-                status=400
-            )
+    language_code = str(payload.get('whatsapp_template_language_code') or payload.get('language_code') or 'pt_BR').strip()
 
     resolved_messages = []
+    resolved_template_messages = []
     for idx, row in enumerate(rows):
         if not isinstance(row, dict):
             return None, JsonResponse({'error': f'Row {idx} is invalid. Expected object.'}, status=400)
@@ -166,30 +144,68 @@ def _resolve_whatsapp_template_messages(payload: dict, user):
         if recipient_value is None or str(recipient_value).strip() == '':
             return None, JsonResponse({'error': f'Missing recipient in row {idx} for column "{contact_column}"'}, status=400)
 
-        message = template.content
-        for variable in variables:
-            mapping = mapping_by_variable[variable]
-            if mapping.get('mode') == 'fixed':
-                value = str(mapping.get('value', ''))
+        params = []
+        for var_idx, mapping in enumerate(mapping_list):
+            if isinstance(mapping, dict):
+                mode = (mapping.get('mode') or '').strip().lower()
+                if mode == 'fixed' or (not mode and 'value' in mapping):
+                    value = mapping.get('value')
+                elif mode == 'column' or (not mode and 'column' in mapping):
+                    source_column = str(mapping.get('column', '')).strip()
+                    if not source_column:
+                        return None, JsonResponse(
+                            {'error': f'column is required in whatsapp_template_variables[{var_idx}]'},
+                            status=400
+                        )
+                    if source_column not in row:
+                        return None, JsonResponse(
+                            {'error': f'Missing column "{source_column}" in row {idx} for whatsapp_template_variables[{var_idx}]'},
+                            status=400
+                        )
+                    value = row.get(source_column)
+                elif 'text' in mapping:
+                    value = mapping.get('text')
+                else:
+                    return None, JsonResponse(
+                        {'error': f'Invalid whatsapp_template_variables[{var_idx}]. Use fixed/column or plain value.'},
+                        status=400
+                    )
             else:
-                source_column = mapping.get('column')
-                if source_column not in row:
-                    return None, JsonResponse(
-                        {'error': f'Missing column "{source_column}" for variable "{variable}" in row {idx}'},
-                        status=400
-                    )
-                value = str(row.get(source_column, ''))
-                if value.strip() == '':
-                    return None, JsonResponse(
-                        {'error': f'Empty value in column "{source_column}" for variable "{variable}" in row {idx}'},
-                        status=400
-                    )
+                value = mapping
 
-            message = message.replace(f'{{{variable}}}', value)
+            if value is None:
+                return None, JsonResponse(
+                    {'error': f'whatsapp_template_variables[{var_idx}] cannot be null'},
+                    status=400
+                )
+
+            value = str(value)
+            if not value.strip():
+                return None, JsonResponse(
+                    {'error': f'whatsapp_template_variables[{var_idx}] cannot be empty'},
+                    status=400
+                )
+
+            params.append(value)
+
+        template_payload = {
+            'name': template.title,
+            'language': {'code': language_code},
+        }
+        if params:
+            template_payload['components'] = [{
+                'type': 'body',
+                'parameters': [{'type': 'text', 'text': value} for value in params],
+            }]
 
         resolved_messages.append({
             'recipient': str(recipient_value).strip(),
-            'message': message,
+            'message': template.title,
+        })
+        resolved_template_messages.append({
+            'recipient': str(recipient_value).strip(),
+            'template': template_payload,
+            'params': params,
         })
 
     payload['phone_number'] = sender.phone_number
@@ -197,7 +213,8 @@ def _resolve_whatsapp_template_messages(payload: dict, user):
     payload['whatsapp_phone_number_id'] = sender.phone_number_id
     payload['whatsapp_business_id'] = sender.business_id
     payload['resolved_messages'] = resolved_messages
-    payload['message'] = template.content
+    payload['resolved_template_messages'] = resolved_template_messages
+    payload['message'] = template.title
 
     return payload, None
 
@@ -399,7 +416,8 @@ def send_whatsapp_view(request):
     payload['channel'] = 'whatsapp'
     payload = _apply_sender_fallback(payload, request.user)
 
-    if payload.get('whatsapp_sender_id') or payload.get('whatsapp_template_title'):
+    has_template_name = bool(payload.get('whatsapp_template_name') or payload.get('whatsapp_template_title'))
+    if has_template_name:
         prepared_payload, error_response = _resolve_whatsapp_template_messages(payload, request.user)
         if error_response is not None:
             return error_response
@@ -488,7 +506,7 @@ def send_view(request):
         if sender_error is not None:
             return sender_error
 
-    if channel == 'whatsapp' and (payload.get('whatsapp_sender_id') or payload.get('whatsapp_template_title')):
+    if channel == 'whatsapp' and (payload.get('whatsapp_template_name') or payload.get('whatsapp_template_title')):
         prepared_payload, error_response = _resolve_whatsapp_template_messages(payload, request.user)
         if error_response is not None:
             return error_response
@@ -678,7 +696,7 @@ def jobs_start_view(request):
         if not payload.get('contact_column'):
             return JsonResponse({'error': 'contact_column is required'}, status=400)
 
-    if channel == 'whatsapp':
+    if channel == 'whatsapp' and (payload.get('whatsapp_template_name') or payload.get('whatsapp_template_title')):
         prepared_payload, error_response = _resolve_whatsapp_template_messages(payload, request.user)
         if error_response is not None:
             return error_response

@@ -206,7 +206,7 @@ class AccountSettingsView(APIView):
 
     def _sync_templates(self, sender, templates_data, template_model_cls, template_serializer_cls):
         """Sincroniza templates aninhados de um sender."""
-        if not templates_data:
+        if templates_data == []:
             template_model_cls.objects.filter(sender=sender).delete()
             return
 
@@ -215,30 +215,49 @@ class AccountSettingsView(APIView):
 
         existing_templates = template_model_cls.objects.filter(sender=sender)
         existing_by_id = {str(obj.id): obj for obj in existing_templates}
+        existing_by_title = {obj.title.strip().lower(): obj for obj in existing_templates if obj.title}
         keep_template_ids = []
 
         for template_item in templates_data:
-            if not isinstance(template_item, dict):
-                raise ValueError('Formato inválido: cada template deve ser um objeto.')
+            if isinstance(template_item, str):
+                template_item = {'title': template_item}
+            elif isinstance(template_item, dict):
+                template_item = dict(template_item)
+            else:
+                raise ValueError('Formato inválido: cada template deve ser um objeto ou string.')
+
+            if not template_item.get('title') and template_item.get('name'):
+                template_item['title'] = template_item.get('name')
 
             template_id = str(template_item.get('id', '')).strip()
-            
-            # Template com ID existente → atualizar
+            template_title = str(template_item.get('title', '')).strip()
+            normalized_title = template_title.lower() if template_title else ''
+
+            existing_template = None
+
             if template_id and template_id in existing_by_id:
+                existing_template = existing_by_id[template_id]
+            elif normalized_title and normalized_title in existing_by_title:
+                existing_template = existing_by_title[normalized_title]
+            
+            # Template existente por ID ou title/name → atualizar
+            if existing_template is not None:
                 template_serializer = template_serializer_cls(
-                    existing_by_id[template_id],
+                    existing_template,
                     data=template_item,
                     partial=True
                 )
                 template_serializer.is_valid(raise_exception=True)
                 updated_template = template_serializer.save()
                 keep_template_ids.append(str(updated_template.id))
-            # Novo template (sem ID ou ID não existe) → criar
+                existing_by_title[updated_template.title.strip().lower()] = updated_template
+            # Novo template (sem ID e sem correspondência por title/name) → criar
             else:
                 template_serializer = template_serializer_cls(data=template_item)
                 template_serializer.is_valid(raise_exception=True)
                 created_template = template_serializer.save(sender=sender)
                 keep_template_ids.append(str(created_template.id))
+                existing_by_title[created_template.title.strip().lower()] = created_template
 
         # Deletar templates não mencionados
         if keep_template_ids:

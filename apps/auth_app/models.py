@@ -110,7 +110,7 @@ class WhatsAppTemplate(models.Model):
 		related_name='templates'
 	)
 	title = models.CharField(max_length=120)
-	content = models.TextField()
+	content = models.TextField(blank=True, default='')
 	created_at = models.DateTimeField(auto_now_add=True)
 	updated_at = models.DateTimeField(auto_now=True)
 

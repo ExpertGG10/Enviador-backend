@@ -200,9 +200,32 @@ class GmailSenderSerializer(serializers.ModelSerializer):
 class WhatsAppTemplateSerializer(serializers.ModelSerializer):
     """Serializer para templates de WhatsApp."""
 
+    name = serializers.CharField(write_only=True, required=False, allow_blank=False)
+
     class Meta:
         model = WhatsAppTemplate
-        fields = ('id', 'title', 'content')
+        fields = ('id', 'title', 'name')
+        extra_kwargs = {
+            'title': {'required': False, 'allow_blank': False},
+        }
+
+    def validate(self, attrs):
+        title = attrs.get('title')
+        name = attrs.pop('name', None)
+
+        if not title and name:
+            title = name
+
+        if not title:
+            raise serializers.ValidationError({'title': 'title (ou name) é obrigatório.'})
+
+        attrs['title'] = str(title).strip()
+        return attrs
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['name'] = data.get('title', '')
+        return data
 
 
 class WhatsAppSenderSerializer(serializers.ModelSerializer):

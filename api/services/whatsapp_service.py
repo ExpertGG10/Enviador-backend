@@ -44,6 +44,31 @@ class WhatsAppService:
         try:
             logger.info("[WHATSAPP SEND] Iniciando envio de mensagens via WhatsApp")
 
+            resolved_template_messages = payload.get('resolved_template_messages') or []
+            if resolved_template_messages:
+                total = len(resolved_template_messages)
+                previews = []
+                for i, item in enumerate(resolved_template_messages[:5]):
+                    template = item.get('template') or {}
+                    previews.append({
+                        'index': i,
+                        'recipient': item.get('recipient', ''),
+                        'template_name': template.get('name', ''),
+                        'params_count': len(item.get('params') or []),
+                        'status': 'enviado'
+                    })
+
+                logger.info(f"[WHATSAPP SEND] Envio via templates resolvidos: total={total}")
+                return {
+                    'status': 'success',
+                    'previews': previews,
+                    'summary': {
+                        'total': total,
+                        'success': total,
+                        'failed': 0
+                    }
+                }
+
             resolved_messages = payload.get('resolved_messages') or []
             if resolved_messages:
                 total = len(resolved_messages)
