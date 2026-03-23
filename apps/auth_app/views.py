@@ -1,16 +1,20 @@
 """Views de Autenticação."""
 
+import requests
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.status import (
     HTTP_200_OK, HTTP_201_CREATED, HTTP_400_BAD_REQUEST,
-    HTTP_401_UNAUTHORIZED
+    HTTP_401_UNAUTHORIZED, HTTP_404_NOT_FOUND
 )
 from rest_framework.permissions import AllowAny, IsAuthenticated
+import logging
 from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
+
+logger = logging.getLogger(__name__)
 
 from .serializers import (
     UserSerializer,
@@ -563,3 +567,63 @@ class WhatsAppTemplateDetailView(APIView):
             return Response({'error': 'Template WhatsApp não encontrado'}, status=404)
         template.delete()
         return Response({'message': 'Template WhatsApp removido com sucesso'}, status=HTTP_200_OK)
+
+
+class WhatsAppTemplatePreviewView(APIView):
+    """Busca os detalhes de um template WhatsApp na Graph API para preview e seleção de variáveis."""
+    permission_classes = [IsAuthenticated]
+
+    GRAPH_API_VERSION = 'v22.0'
+    GRAPH_API_BASE = 'https://graph.facebook.com'
+
+    def _get_sender(self, request, sender_id):
+        try:
+            return WhatsAppSender.objects.get(id=sender_id, user=request.user)
+        except WhatsAppSender.DoesNotExist:
+            return None
+
+    def get(self, request, sender_id, template_name):
+        """
+        GET /api/account/whatsapp/senders/<uuid:sender_id>/templates/<str:template_name>/preview/
+
+        Consulta a Graph API do WhatsApp e retorna os dados do template:
+        name, language, status, category e components (HEADER, BODY, FOOTER, BUTTONS).
+        """
+        sender = self._get_sender(request, sender_id)
+        if not sender:
+            return Response({'error': 'Remetente WhatsApp não encontrado'}, status=HTTP_404_NOT_FOUND)
+
+        access_token = sender.get_access_token()
+        business_id = sender.business_id
+
+        if not access_token:
+            return Response({'error': 'Token de acesso não configurado para este remetente'}, status=HTTP_400_BAD_REQUEST)
+        if not business_id:
+            return Response({'error': 'Business ID não configurado para este remetente'}, status=HTTP_400_BAD_REQUEST)
+
+        url = f'{self.GRAPH_API_BASE}/{self.GRAPH_API_VERSION}/{business_id}/message_templates'
+        params = {'name': template_name}
+        headers = {'Authorization': f'Bearer {access_token}'}
+
+        try:
+            resp = requests.get(url, params=params, headers=headers, timeout=10)
+        except requests.RequestException as exc:
+            logger.error(f'[TEMPLATE PREVIEW] Erro de conexão com a Graph API: {exc}')
+            return Response({'error': 'Não foi possível conectar à API do WhatsApp'}, status=HTTP_400_BAD_REQUEST)
+
+        if not resp.ok:
+            try:
+                error_body = resp.json()
+            except ValueError:
+                error_body = {'raw': resp.text}
+            logger.warning(f'[TEMPLATE PREVIEW] Erro da Graph API ({resp.status_code}): {error_body}')
+            return Response(
+                {'error': 'Erro ao consultar a API do WhatsApp', 'detail': error_body},
+                status=resp.status_code,
+            )
+
+        data = resp.json().get('data', [])
+        if not data:
+            return Response({'error': f'Template "{template_name}" não encontrado'}, status=HTTP_404_NOT_FOUND)
+
+        return Response(data[0], status=HTTP_200_OK)
