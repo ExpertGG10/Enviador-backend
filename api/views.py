@@ -135,7 +135,7 @@ def _resolve_whatsapp_template_messages(payload: dict, user):
         return None, JsonResponse({'error': 'whatsapp_template_variables must be an array'}, status=400)
 
     language_code = str(payload.get('whatsapp_template_language_code') or payload.get('language_code') or 'pt_BR').strip()
-    parameter_format = str(payload.get('whatsapp_template_parameter_format') or 'POSITIONAL').strip().upper()
+    parameter_format = str(payload.get('whatsapp_template_parameter_format') or 'NAMED').strip().upper()
     if parameter_format not in {'POSITIONAL', 'NAMED'}:
         return None, JsonResponse({'error': 'whatsapp_template_parameter_format must be POSITIONAL or NAMED'}, status=400)
 
@@ -177,12 +177,21 @@ def _resolve_whatsapp_template_messages(payload: dict, user):
                         status=400
                     )
 
-                raw_parameter_name = mapping.get('parameter_name') or mapping.get('name')
-                if raw_parameter_name is not None:
+                if parameter_format == 'NAMED':
+                    raw_parameter_name = mapping.get('parameter_name')
+                    if raw_parameter_name is None:
+                        raw_parameter_name = mapping.get('name')
+
+                    if raw_parameter_name is None:
+                        return None, JsonResponse(
+                            {'error': f'name is required in whatsapp_template_variables[{var_idx}] when format is NAMED'},
+                            status=400
+                        )
+
                     parameter_name = str(raw_parameter_name).strip()
                     if not parameter_name:
                         return None, JsonResponse(
-                            {'error': f'parameter_name cannot be empty in whatsapp_template_variables[{var_idx}]'},
+                            {'error': f'name cannot be empty in whatsapp_template_variables[{var_idx}] when format is NAMED'},
                             status=400
                         )
             else:
@@ -202,13 +211,8 @@ def _resolve_whatsapp_template_messages(payload: dict, user):
                 )
 
             parameter_payload = {'type': 'text', 'text': value}
-            if parameter_name:
+            if parameter_format == 'NAMED':
                 parameter_payload['parameter_name'] = parameter_name
-            elif parameter_format == 'NAMED':
-                return None, JsonResponse(
-                    {'error': f'parameter_name is required in whatsapp_template_variables[{var_idx}] when format is NAMED'},
-                    status=400
-                )
 
             parameters.append(parameter_payload)
 
