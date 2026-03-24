@@ -78,7 +78,7 @@ class WhatsAppSender(models.Model):
 	phone_number = models.CharField(max_length=30)
 	access_token_encrypted = models.TextField(blank=True, default='')
 	phone_number_id = models.CharField(max_length=120)
-	business_id = models.CharField(max_length=120)
+	waba_id = models.CharField(max_length=120)
 	created_at = models.DateTimeField(auto_now_add=True)
 	updated_at = models.DateTimeField(auto_now=True)
 

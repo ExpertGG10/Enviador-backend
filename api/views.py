@@ -82,8 +82,10 @@ def _apply_sender_fallback(payload: dict, user):
             payload['whatsapp_access_token'] = sender.get_access_token()
         if not payload.get('whatsapp_phone_number_id'):
             payload['whatsapp_phone_number_id'] = sender.phone_number_id
+        if not payload.get('whatsapp_waba_id'):
+            payload['whatsapp_waba_id'] = sender.waba_id
         if not payload.get('whatsapp_business_id'):
-            payload['whatsapp_business_id'] = sender.business_id
+            payload['whatsapp_business_id'] = sender.waba_id
         if not payload.get('phone_number'):
             payload['phone_number'] = sender.phone_number
         if not payload.get('whatsapp_templates'):
@@ -236,7 +238,8 @@ def _resolve_whatsapp_template_messages(payload: dict, user):
     payload['phone_number'] = sender.phone_number
     payload['whatsapp_access_token'] = sender.get_access_token()
     payload['whatsapp_phone_number_id'] = sender.phone_number_id
-    payload['whatsapp_business_id'] = sender.business_id
+    payload['whatsapp_waba_id'] = sender.waba_id
+    payload['whatsapp_business_id'] = sender.waba_id
     payload['resolved_messages'] = resolved_messages
     payload['resolved_template_messages'] = resolved_template_messages
     payload['message'] = template.title

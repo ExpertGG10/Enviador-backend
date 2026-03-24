@@ -235,7 +235,7 @@ class WhatsAppSenderSerializer(serializers.ModelSerializer):
     accessToken = serializers.CharField(write_only=True, required=False, allow_blank=True)
     accessTokenMasked = serializers.SerializerMethodField(read_only=True)
     phoneNumberId = serializers.CharField(source='phone_number_id')
-    businessId = serializers.CharField(source='business_id')
+    wabaId = serializers.CharField(source='waba_id')
     templates = WhatsAppTemplateSerializer(many=True, read_only=True)
 
     class Meta:
@@ -246,9 +246,15 @@ class WhatsAppSenderSerializer(serializers.ModelSerializer):
             'accessToken',
             'accessTokenMasked',
             'phoneNumberId',
-            'businessId',
+            'wabaId',
             'templates',
         )
+
+    def to_internal_value(self, data):
+        if isinstance(data, dict) and 'wabaId' not in data and 'businessId' in data:
+            data = dict(data)
+            data['wabaId'] = data.get('businessId')
+        return super().to_internal_value(data)
 
     def get_accessTokenMasked(self, obj):
         if not obj.access_token_encrypted:

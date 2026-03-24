@@ -595,15 +595,15 @@ class WhatsAppTemplatePreviewView(APIView):
             return Response({'error': 'Remetente WhatsApp não encontrado'}, status=HTTP_404_NOT_FOUND)
 
         access_token = sender.get_access_token()
-        business_id = sender.business_id
+        waba_id = sender.waba_id
 
         if not access_token:
             return Response({'error': 'Token de acesso não configurado para este remetente'}, status=HTTP_400_BAD_REQUEST)
-        if not business_id:
-            return Response({'error': 'Business ID não configurado para este remetente'}, status=HTTP_400_BAD_REQUEST)
+        if not waba_id:
+            return Response({'error': 'WABA ID não configurado para este remetente'}, status=HTTP_400_BAD_REQUEST)
 
         encoded_template_name = quote_plus(str(template_name))
-        url = f'{self.GRAPH_API_BASE}/{self.GRAPH_API_VERSION}/{business_id}/message_templates?name={encoded_template_name}'
+        url = f'{self.GRAPH_API_BASE}/{self.GRAPH_API_VERSION}/{waba_id}/message_templates?name={encoded_template_name}'
         headers = {'Authorization': f'Bearer {access_token}'}
 
         try:

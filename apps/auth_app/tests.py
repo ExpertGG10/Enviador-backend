@@ -67,7 +67,7 @@ class AccountSettingsTemplateSyncTests(TestCase):
             user=self.user,
             phone_number='5541999999999',
             phone_number_id='123456',
-            business_id='654321',
+            waba_id='654321',
         )
         self.sender.set_access_token('secret-token')
         self.sender.save()
