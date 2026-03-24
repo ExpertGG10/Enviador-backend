@@ -133,6 +133,9 @@ def _resolve_whatsapp_template_messages(payload: dict, user):
         return None, JsonResponse({'error': 'whatsapp_template_variables must be an array'}, status=400)
 
     language_code = str(payload.get('whatsapp_template_language_code') or payload.get('language_code') or 'pt_BR').strip()
+    parameter_format = str(payload.get('whatsapp_template_parameter_format') or 'POSITIONAL').strip().upper()
+    if parameter_format not in {'POSITIONAL', 'NAMED'}:
+        return None, JsonResponse({'error': 'whatsapp_template_parameter_format must be POSITIONAL or NAMED'}, status=400)
 
     resolved_messages = []
     resolved_template_messages = []
@@ -144,8 +147,9 @@ def _resolve_whatsapp_template_messages(payload: dict, user):
         if recipient_value is None or str(recipient_value).strip() == '':
             return None, JsonResponse({'error': f'Missing recipient in row {idx} for column "{contact_column}"'}, status=400)
 
-        params = []
+        parameters = []
         for var_idx, mapping in enumerate(mapping_list):
+            parameter_name = None
             if isinstance(mapping, dict):
                 mode = (mapping.get('mode') or '').strip().lower()
                 if mode == 'fixed' or (not mode and 'value' in mapping):
@@ -170,6 +174,15 @@ def _resolve_whatsapp_template_messages(payload: dict, user):
                         {'error': f'Invalid whatsapp_template_variables[{var_idx}]. Use fixed/column or plain value.'},
                         status=400
                     )
+
+                raw_parameter_name = mapping.get('parameter_name') or mapping.get('name')
+                if raw_parameter_name is not None:
+                    parameter_name = str(raw_parameter_name).strip()
+                    if not parameter_name:
+                        return None, JsonResponse(
+                            {'error': f'parameter_name cannot be empty in whatsapp_template_variables[{var_idx}]'},
+                            status=400
+                        )
             else:
                 value = mapping
 
@@ -186,16 +199,27 @@ def _resolve_whatsapp_template_messages(payload: dict, user):
                     status=400
                 )
 
-            params.append(value)
+            parameter_payload = {'type': 'text', 'text': value}
+            if parameter_name:
+                parameter_payload['parameter_name'] = parameter_name
+            elif parameter_format == 'NAMED':
+                return None, JsonResponse(
+                    {'error': f'parameter_name is required in whatsapp_template_variables[{var_idx}] when format is NAMED'},
+                    status=400
+                )
+
+            parameters.append(parameter_payload)
 
         template_payload = {
             'name': template.title,
             'language': {'code': language_code},
         }
-        if params:
+        if parameter_format == 'NAMED':
+            template_payload['parameter_format'] = 'NAMED'
+        if parameters:
             template_payload['components'] = [{
                 'type': 'body',
-                'parameters': [{'type': 'text', 'text': value} for value in params],
+                'parameters': parameters,
             }]
 
         resolved_messages.append({
@@ -205,7 +229,8 @@ def _resolve_whatsapp_template_messages(payload: dict, user):
         resolved_template_messages.append({
             'recipient': str(recipient_value).strip(),
             'template': template_payload,
-            'params': params,
+            'params': [param.get('text', '') for param in parameters],
+            'parameters': parameters,
         })
 
     payload['phone_number'] = sender.phone_number
