@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from django.contrib.auth.models import User
 from django.test import TestCase
@@ -130,8 +130,32 @@ class WhatsAppTemplatePayloadTests(TestCase):
             title='pagamento_boletos_mensalidade',
         )
 
+    def _mock_template_lookup(self, get_mock, components):
+        response = Mock()
+        response.ok = True
+        response.status_code = 200
+        response.json.return_value = {
+            'data': [
+                {
+                    'name': self.template.title,
+                    'components': components,
+                }
+            ]
+        }
+        get_mock.return_value = response
+
+    @patch('api.views.requests.get')
     @patch('api.services.whatsapp_service.WhatsAppService.send')
-    def test_send_whatsapp_template_defaults_to_named_and_maps_name_field(self, send_mock):
+    def test_send_whatsapp_template_defaults_to_named_and_maps_name_field(self, send_mock, get_mock):
+        self._mock_template_lookup(
+            get_mock,
+            [
+                {
+                    'type': 'BODY',
+                    'text': 'Oi {{aluno}}, vencimento {{data}} em {{dia_semana}}',
+                }
+            ],
+        )
         send_mock.return_value = {
             'status': 'success',
             'previews': [],
@@ -163,7 +187,7 @@ class WhatsAppTemplatePayloadTests(TestCase):
         resolved_message = service_payload['resolved_template_messages'][0]
         template_payload = resolved_message['template']
 
-        self.assertEqual(template_payload['parameter_format'], 'NAMED')
+        self.assertNotIn('parameter_format', template_payload)
         self.assertEqual(
             template_payload['components'][0]['parameters'],
             [
@@ -173,8 +197,18 @@ class WhatsAppTemplatePayloadTests(TestCase):
             ],
         )
 
+    @patch('api.views.requests.get')
     @patch('api.services.whatsapp_service.WhatsAppService.send')
-    def test_send_whatsapp_template_positional_ignores_provided_names(self, send_mock):
+    def test_send_whatsapp_template_positional_ignores_provided_names(self, send_mock, get_mock):
+        self._mock_template_lookup(
+            get_mock,
+            [
+                {
+                    'type': 'BODY',
+                    'text': 'Oi {{1}}, vencimento {{2}}',
+                }
+            ],
+        )
         send_mock.return_value = {
             'status': 'success',
             'previews': [],
@@ -211,6 +245,71 @@ class WhatsAppTemplatePayloadTests(TestCase):
             [
                 {'type': 'text', 'text': 'Gustavo'},
                 {'type': 'text', 'text': '24/03'},
+            ],
+        )
+
+    @patch('api.views.requests.get')
+    @patch('api.services.whatsapp_service.WhatsAppService.send')
+    def test_send_whatsapp_template_splits_parameters_by_component(self, send_mock, get_mock):
+        self._mock_template_lookup(
+            get_mock,
+            [
+                {
+                    'type': 'HEADER',
+                    'text': 'Aluno {{aluno}}',
+                },
+                {
+                    'type': 'BODY',
+                    'text': 'Vencimento {{data}} em {{dia_semana}}',
+                }
+            ],
+        )
+        send_mock.return_value = {
+            'status': 'success',
+            'previews': [],
+            'summary': {'total': 1, 'success': 1, 'failed': 0},
+        }
+
+        payload = {
+            'channel': 'whatsapp',
+            'whatsapp_sender_id': str(self.sender.id),
+            'whatsapp_template_title': self.template.title,
+            'whatsapp_template_language_code': 'pt_BR',
+            'rows': [
+                {'Nome': 'Gustavo', 'Celular': '5541997393566'}
+            ],
+            'contact_column': 'Celular',
+            'whatsapp_template_variables': [
+                {'name': 'aluno', 'mode': 'column', 'column': 'Nome'},
+                {'name': 'data', 'mode': 'fixed', 'value': '24/03'},
+                {'name': 'dia_semana', 'mode': 'fixed', 'value': 'Segunda'},
+            ],
+        }
+
+        response = self.client.post(reverse('send_whatsapp'), payload, format='json')
+
+        self.assertEqual(response.status_code, 202)
+        send_mock.assert_called_once()
+
+        service_payload = send_mock.call_args.args[0]
+        template_payload = service_payload['resolved_template_messages'][0]['template']
+
+        self.assertEqual(
+            template_payload['components'],
+            [
+                {
+                    'type': 'header',
+                    'parameters': [
+                        {'type': 'text', 'parameter_name': 'aluno', 'text': 'Gustavo'},
+                    ],
+                },
+                {
+                    'type': 'body',
+                    'parameters': [
+                        {'type': 'text', 'parameter_name': 'data', 'text': '24/03'},
+                        {'type': 'text', 'parameter_name': 'dia_semana', 'text': 'Segunda'},
+                    ],
+                },
             ],
         )
 

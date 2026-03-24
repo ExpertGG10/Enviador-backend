@@ -1,5 +1,8 @@
 import json
 import re
+from urllib.parse import quote_plus
+
+import requests
 from django.http import JsonResponse, HttpResponseBadRequest
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
@@ -19,6 +22,9 @@ from .services import job_manager
 
 
 logger = logging.getLogger(__name__)
+
+WHATSAPP_GRAPH_API_VERSION = 'v22.0'
+WHATSAPP_GRAPH_API_BASE = 'https://graph.facebook.com'
 
 
 def _is_masked_secret(value) -> bool:
@@ -97,6 +103,60 @@ def _extract_template_variables(template_content: str):
     return list(dict.fromkeys(re.findall(r"\{([^{}]+)\}", template_content or "")))
 
 
+def _fetch_whatsapp_template_definition(sender: WhatsAppSender, template_name: str):
+    access_token = sender.get_access_token()
+    waba_id = sender.waba_id
+
+    if not access_token:
+        return None, JsonResponse({'error': 'Token de acesso não configurado para este remetente'}, status=400)
+    if not waba_id:
+        return None, JsonResponse({'error': 'WABA ID não configurado para este remetente'}, status=400)
+
+    encoded_template_name = quote_plus(str(template_name))
+    url = f'{WHATSAPP_GRAPH_API_BASE}/{WHATSAPP_GRAPH_API_VERSION}/{waba_id}/message_templates?name={encoded_template_name}'
+    headers = {'Authorization': f'Bearer {access_token}'}
+
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+    except requests.RequestException as exc:
+        logger.error('[WHATSAPP TEMPLATE] Erro de conexão com a Graph API: %s', exc)
+        return None, JsonResponse({'error': 'Não foi possível validar o template na API do WhatsApp'}, status=400)
+
+    if not resp.ok:
+        try:
+            error_body = resp.json()
+        except ValueError:
+            error_body = {'raw': resp.text}
+        logger.warning('[WHATSAPP TEMPLATE] Erro da Graph API (%s): %s', resp.status_code, error_body)
+        return None, JsonResponse(
+            {'error': 'Erro ao consultar template na API do WhatsApp', 'detail': error_body},
+            status=resp.status_code,
+        )
+
+    data = resp.json().get('data', [])
+    for item in data:
+        if str(item.get('name', '')).strip() == template_name:
+            return item, None
+
+    return None, JsonResponse({'error': f'Template "{template_name}" não encontrado na API do WhatsApp'}, status=404)
+
+
+def _extract_template_variable_specs(template_definition: dict):
+    specs = []
+
+    for component in template_definition.get('components', []):
+        component_type = str(component.get('type') or '').strip().upper()
+        component_text = component.get('text') or ''
+        variable_names = _extract_template_variables(component_text)
+        if component_type and variable_names:
+            specs.append({
+                'type': component_type,
+                'variable_names': variable_names,
+            })
+
+    return specs
+
+
 def _resolve_whatsapp_template_messages(payload: dict, user):
     sender_id = payload.get('whatsapp_sender_id')
     if not sender_id:
@@ -128,6 +188,13 @@ def _resolve_whatsapp_template_messages(payload: dict, user):
     except WhatsAppTemplate.DoesNotExist:
         return None, JsonResponse({'error': 'WhatsApp template not found for this sender'}, status=404)
 
+    template_definition, error_response = _fetch_whatsapp_template_definition(sender, template_name)
+    if error_response is not None:
+        return None, error_response
+
+    variable_specs = _extract_template_variable_specs(template_definition)
+    expected_parameter_count = sum(len(spec['variable_names']) for spec in variable_specs)
+
     mapping_list = payload.get('whatsapp_template_variables', [])
     if mapping_list is None:
         mapping_list = []
@@ -139,6 +206,18 @@ def _resolve_whatsapp_template_messages(payload: dict, user):
     if parameter_format not in {'POSITIONAL', 'NAMED'}:
         return None, JsonResponse({'error': 'whatsapp_template_parameter_format must be POSITIONAL or NAMED'}, status=400)
 
+    if len(mapping_list) != expected_parameter_count:
+        return None, JsonResponse(
+            {
+                'error': 'Quantidade de parâmetros incompatível com o template do WhatsApp.',
+                'detail': {
+                    'expected': expected_parameter_count,
+                    'received': len(mapping_list),
+                },
+            },
+            status=400,
+        )
+
     resolved_messages = []
     resolved_template_messages = []
     for idx, row in enumerate(rows):
@@ -149,7 +228,7 @@ def _resolve_whatsapp_template_messages(payload: dict, user):
         if recipient_value is None or str(recipient_value).strip() == '':
             return None, JsonResponse({'error': f'Missing recipient in row {idx} for column "{contact_column}"'}, status=400)
 
-        parameters = []
+        all_parameters = []
         for var_idx, mapping in enumerate(mapping_list):
             parameter_name = None
             if isinstance(mapping, dict):
@@ -214,18 +293,26 @@ def _resolve_whatsapp_template_messages(payload: dict, user):
             if parameter_format == 'NAMED':
                 parameter_payload['parameter_name'] = parameter_name
 
-            parameters.append(parameter_payload)
+            all_parameters.append(parameter_payload)
+
+        components_payload = []
+        parameter_offset = 0
+        for spec in variable_specs:
+            variable_count = len(spec['variable_names'])
+            component_parameters = all_parameters[parameter_offset:parameter_offset + variable_count]
+            parameter_offset += variable_count
+            if component_parameters:
+                components_payload.append({
+                    'type': spec['type'].lower(),
+                    'parameters': component_parameters,
+                })
 
         template_payload = {
             'name': template.title,
             'language': {'code': language_code},
         }
-        
-        if parameters:
-            template_payload['components'] = [{
-                'type': 'body',
-                'parameters': parameters,
-            }]
+        if components_payload:
+            template_payload['components'] = components_payload
 
         resolved_messages.append({
             'recipient': str(recipient_value).strip(),
@@ -234,8 +321,8 @@ def _resolve_whatsapp_template_messages(payload: dict, user):
         resolved_template_messages.append({
             'recipient': str(recipient_value).strip(),
             'template': template_payload,
-            'params': [param.get('text', '') for param in parameters],
-            'parameters': parameters,
+            'params': [param.get('text', '') for param in all_parameters],
+            'parameters': all_parameters,
         })
 
     payload['phone_number'] = sender.phone_number
