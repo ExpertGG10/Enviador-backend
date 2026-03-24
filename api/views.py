@@ -220,8 +220,7 @@ def _resolve_whatsapp_template_messages(payload: dict, user):
             'name': template.title,
             'language': {'code': language_code},
         }
-        if parameter_format == 'NAMED':
-            template_payload['parameter_format'] = 'NAMED'
+        
         if parameters:
             template_payload['components'] = [{
                 'type': 'body',
