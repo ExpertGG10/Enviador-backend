@@ -1,6 +1,7 @@
 """Views de Autenticação."""
 
 import requests
+from urllib.parse import quote_plus
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.status import (
@@ -601,12 +602,12 @@ class WhatsAppTemplatePreviewView(APIView):
         if not business_id:
             return Response({'error': 'Business ID não configurado para este remetente'}, status=HTTP_400_BAD_REQUEST)
 
-        url = f'{self.GRAPH_API_BASE}/{self.GRAPH_API_VERSION}/{business_id}/message_templates'
-        params = {'name': template_name}
+        encoded_template_name = quote_plus(str(template_name))
+        url = f'{self.GRAPH_API_BASE}/{self.GRAPH_API_VERSION}/{business_id}/message_templates?name={encoded_template_name}'
         headers = {'Authorization': f'Bearer {access_token}'}
 
         try:
-            resp = requests.get(url, params=params, headers=headers, timeout=10)
+            resp = requests.get(url, headers=headers, timeout=10)
         except requests.RequestException as exc:
             logger.error(f'[TEMPLATE PREVIEW] Erro de conexão com a Graph API: {exc}')
             return Response({'error': 'Não foi possível conectar à API do WhatsApp'}, status=HTTP_400_BAD_REQUEST)
