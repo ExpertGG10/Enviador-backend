@@ -626,4 +626,21 @@ class WhatsAppTemplatePreviewView(APIView):
         if not data:
             return Response({'error': f'Template "{template_name}" não encontrado'}, status=HTTP_404_NOT_FOUND)
 
-        return Response(data[0], status=HTTP_200_OK)
+        return Response(self._extract_texts(data[0]), status=HTTP_200_OK)
+
+    def _extract_texts(self, template: dict) -> dict:
+        """Extrai apenas os textos relevantes de cada componente do template."""
+        result = {'name': template.get('name'), 'language': template.get('language')}
+
+        for component in template.get('components', []):
+            component_type = (component.get('type') or '').upper()
+            if component_type == 'HEADER':
+                result['header'] = component.get('text') or ''
+            elif component_type == 'BODY':
+                result['body'] = component.get('text') or ''
+            elif component_type == 'FOOTER':
+                result['footer'] = component.get('text') or ''
+            elif component_type == 'BUTTONS':
+                result['buttons'] = [btn.get('text') for btn in component.get('buttons', []) if btn.get('text')]
+
+        return result
