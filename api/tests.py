@@ -8,6 +8,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework.test import APIClient
 
 from apps.auth_app.models import WhatsAppSender, WhatsAppTemplate
+from api.services.whatsapp_service import WhatsAppService
 
 
 class ApiTests(TestCase):
@@ -212,3 +213,48 @@ class WhatsAppTemplatePayloadTests(TestCase):
                 {'type': 'text', 'text': '24/03'},
             ],
         )
+
+
+class WhatsAppServiceTemplateResultTests(TestCase):
+    @patch('api.services.whatsapp_service.WhatsAppService._send_template_message')
+    def test_returns_error_when_all_template_sends_fail(self, send_template_mock):
+        send_template_mock.side_effect = [
+            {'success': False, 'status_code': 400, 'error': 'Invalid parameter'},
+            {'success': False, 'status_code': 400, 'error': 'Invalid parameter'},
+        ]
+
+        payload = {
+            'whatsapp_access_token': 'token',
+            'whatsapp_phone_number_id': 'phone-id',
+            'resolved_template_messages': [
+                {'recipient': '5541997393566', 'template': {'name': 'pagamento'}},
+                {'recipient': '5541997393567', 'template': {'name': 'pagamento'}},
+            ],
+        }
+
+        result = WhatsAppService.send(payload)
+
+        self.assertEqual(result['status'], 'error')
+        self.assertEqual(result['summary'], {'total': 2, 'success': 0, 'failed': 2})
+        self.assertEqual(result['error'], 'Invalid parameter')
+
+    @patch('api.services.whatsapp_service.WhatsAppService._send_template_message')
+    def test_returns_partial_success_when_at_least_one_send_succeeds(self, send_template_mock):
+        send_template_mock.side_effect = [
+            {'success': True, 'status_code': 200, 'message_id': 'wamid.1'},
+            {'success': False, 'status_code': 400, 'error': 'Invalid parameter'},
+        ]
+
+        payload = {
+            'whatsapp_access_token': 'token',
+            'whatsapp_phone_number_id': 'phone-id',
+            'resolved_template_messages': [
+                {'recipient': '5541997393566', 'template': {'name': 'pagamento'}},
+                {'recipient': '5541997393567', 'template': {'name': 'pagamento'}},
+            ],
+        }
+
+        result = WhatsAppService.send(payload)
+
+        self.assertEqual(result['status'], 'partial_success')
+        self.assertEqual(result['summary'], {'total': 2, 'success': 1, 'failed': 1})

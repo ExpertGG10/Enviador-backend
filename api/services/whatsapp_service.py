@@ -112,6 +112,7 @@ class WhatsAppService:
                 success_count = 0
                 failed_count = 0
                 previews = []
+                failed_errors = []
 
                 for i, item in enumerate(resolved_template_messages):
                     recipient = str(item.get('recipient', '')).strip()
@@ -145,6 +146,15 @@ class WhatsAppService:
                         failed_count += 1
                         preview_status = 'erro'
                         preview_error = send_result.get('error')
+                        if preview_error:
+                            failed_errors.append(str(preview_error))
+                        logger.warning(
+                            "[WHATSAPP SEND] Falha ao enviar template: recipient=%s template=%s status_code=%s error=%s",
+                            recipient,
+                            template.get('name', ''),
+                            send_result.get('status_code'),
+                            preview_error or 'Erro ao enviar template',
+                        )
 
                     if len(previews) < 5:
                         preview_payload = {
@@ -164,6 +174,20 @@ class WhatsAppService:
                     success_count,
                     failed_count,
                 )
+
+                if success_count == 0 and failed_count > 0:
+                    common_error = failed_errors[0] if failed_errors else 'Nenhuma mensagem foi enviada com sucesso'
+                    return {
+                        'status': 'error',
+                        'error': common_error,
+                        'previews': previews,
+                        'summary': {
+                            'total': total,
+                            'success': success_count,
+                            'failed': failed_count
+                        }
+                    }
+
                 return {
                     'status': 'success' if failed_count == 0 else 'partial_success',
                     'previews': previews,
