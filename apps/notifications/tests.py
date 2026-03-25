@@ -6,7 +6,7 @@ from django.urls import reverse
 from rest_framework.test import APIClient
 
 from .services import WebhookHandlerService
-from .models import WhatsAppWebhookMessage
+from .models import WhatsAppWebhookMessage, WhatsAppOutboundMessage
 
 
 class WebhookTests(TestCase):
@@ -115,3 +115,72 @@ class WebhookTests(TestCase):
         self.assertEqual(payload['stats']['wa_id_filter'], '554197393566')
         self.assertEqual(len(payload['conversation_list']), 1)
         self.assertEqual(payload['conversation_list'][0]['wa_id'], '554197393566')
+
+    def test_webhook_status_updates_outbound_message_to_recebido_and_lido(self):
+        message_id = 'wamid.HBgLMTY1MDM4Nzk0MzkVAgARGBI3MTE5MjVBOTE3MDk5QUVFM0YA'
+        outbound = WhatsAppOutboundMessage.objects.create(
+            to_wa_id='16505551234',
+            text_body='Mensagem teste',
+            whatsapp_message_id=message_id,
+            phone_number_id='106540352242922',
+            status='enviado',
+            sent_by=self.user,
+            payload={},
+        )
+
+        delivered_payload = {
+            'object': 'whatsapp_business_account',
+            'entry': [{
+                'id': '102290129340398',
+                'changes': [{
+                    'value': {
+                        'messaging_product': 'whatsapp',
+                        'metadata': {
+                            'display_phone_number': '15550783881',
+                            'phone_number_id': '106540352242922',
+                        },
+                        'statuses': [{
+                            'id': message_id,
+                            'status': 'delivered',
+                            'timestamp': '1750263773',
+                            'recipient_id': '16505551234',
+                        }],
+                    },
+                    'field': 'messages',
+                }],
+            }],
+        }
+
+        read_payload = {
+            'object': 'whatsapp_business_account',
+            'entry': [{
+                'id': '102290129340398',
+                'changes': [{
+                    'value': {
+                        'messaging_product': 'whatsapp',
+                        'metadata': {
+                            'display_phone_number': '15550783881',
+                            'phone_number_id': '106540352242922',
+                        },
+                        'statuses': [{
+                            'id': message_id,
+                            'status': 'read',
+                            'timestamp': '1750263799',
+                            'recipient_id': '16505551234',
+                        }],
+                    },
+                    'field': 'messages',
+                }],
+            }],
+        }
+
+        WebhookHandlerService.log_webhook_event(delivered_payload)
+        outbound.refresh_from_db()
+        self.assertEqual(outbound.status, 'recebido')
+        self.assertEqual(outbound.payload['last_webhook_status']['raw_status'], 'delivered')
+
+        WebhookHandlerService.log_webhook_event(read_payload)
+        outbound.refresh_from_db()
+        self.assertEqual(outbound.status, 'lido')
+        self.assertEqual(outbound.payload['last_webhook_status']['raw_status'], 'read')
+        self.assertEqual(len(outbound.payload.get('status_history', [])), 2)

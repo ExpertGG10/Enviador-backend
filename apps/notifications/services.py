@@ -11,9 +11,18 @@ from .models import (
     WhatsAppWebhookChange,
     WhatsAppWebhookContact,
     WhatsAppWebhookMessage,
+    WhatsAppOutboundMessage,
 )
 
 logger = logging.getLogger(__name__)
+
+
+WHATSAPP_STATUS_MAP = {
+    'sent': 'enviado',
+    'delivered': 'recebido',
+    'read': 'lido',
+    'failed': 'falha',
+}
 
 
 class WhatsAppAPIService:
@@ -169,6 +178,56 @@ class WhatsAppAPIService:
 
 class WebhookHandlerService:
     """Serviço para processar webhooks."""
+
+    @staticmethod
+    def _map_status(raw_status: str) -> str:
+        status_key = str(raw_status or '').strip().lower()
+        return WHATSAPP_STATUS_MAP.get(status_key, status_key or 'desconhecido')
+
+    @staticmethod
+    def _update_outbound_status(status_payload: dict, change: WhatsAppWebhookChange):
+        message_id = str(status_payload.get('id') or '').strip()
+        if not message_id:
+            return
+
+        outbound = (
+            WhatsAppOutboundMessage.objects
+            .filter(whatsapp_message_id=message_id)
+            .order_by('-created_at')
+            .first()
+        )
+        if outbound is None:
+            logger.info('[WEBHOOK STATUS] Mensagem outbound não encontrada para id=%s', message_id)
+            return
+
+        mapped_status = WebhookHandlerService._map_status(status_payload.get('status'))
+
+        event = {
+            'message_id': message_id,
+            'raw_status': status_payload.get('status'),
+            'status': mapped_status,
+            'timestamp': status_payload.get('timestamp'),
+            'recipient_id': status_payload.get('recipient_id'),
+            'phone_number_id': change.phone_number_id,
+            'conversation': status_payload.get('conversation'),
+            'pricing': status_payload.get('pricing'),
+            'errors': status_payload.get('errors') or [],
+        }
+
+        updated_payload = dict(outbound.payload or {})
+        history = list(updated_payload.get('status_history') or [])
+        history.append(event)
+        updated_payload['status_history'] = history
+        updated_payload['last_webhook_status'] = event
+
+        outbound.status = mapped_status
+        outbound.payload = updated_payload
+        outbound.save(update_fields=['status', 'payload'])
+        logger.info(
+            '[WEBHOOK STATUS] Outbound atualizado message_id=%s status=%s',
+            message_id,
+            mapped_status,
+        )
     
     @staticmethod
     def parse_webhook_event(data):
@@ -291,6 +350,9 @@ class WebhookHandlerService:
                             text_body=text_content,
                             payload=message_payload,
                         )
+
+                    for status_payload in value.get('statuses', []):
+                        WebhookHandlerService._update_outbound_status(status_payload, change)
 
             print(f'[WEBHOOK HANDLER LOG] OK Evento {event.id} registrado com sucesso')
         except Exception as e:

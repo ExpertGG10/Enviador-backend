@@ -166,7 +166,7 @@ def _send_whatsapp_reply(phone_number_id: str, to: str, received_body: str):
                     text_body=reply_text,
                     whatsapp_message_id=whatsapp_message_id,
                     phone_number_id=phone_number_id,
-                    status='sent',
+                    status='enviado',
                     sent_by=None,
                     payload=response_payload if isinstance(response_payload, dict) else {'response': response_payload},
                 )
@@ -431,7 +431,7 @@ def whatsapp_send_text_view(request):
         text_body=text,
         whatsapp_message_id=result.get('message_id', ''),
         phone_number_id=sender.phone_number_id,
-        status=result.get('status', 'sent'),
+        status='enviado' if result.get('status') == 'sent' else result.get('status', 'enviado'),
         sent_by=request.user,
         payload=result,
     )
