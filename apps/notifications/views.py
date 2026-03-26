@@ -55,6 +55,23 @@ def _build_contact_name_map(wa_ids):
     return names_by_wa_id
 
 
+def _extract_media_payload(message_payload: dict, message_type: str) -> dict:
+    """Retorna o bloco de mídia do payload para tipos suportados."""
+    message_type = (message_type or '').lower()
+    if message_type not in {'image', 'video', 'document'}:
+        return {}
+    media_payload = message_payload.get(message_type)
+    return media_payload if isinstance(media_payload, dict) else {}
+
+
+def _extract_media_caption(message: WhatsAppWebhookMessage) -> str:
+    """Extrai caption de image/video/document armazenados no payload do webhook."""
+    payload = message.payload if isinstance(message.payload, dict) else {}
+    media_payload = _extract_media_payload(payload, message.message_type)
+    caption = media_payload.get('caption')
+    return str(caption).strip() if caption is not None else ''
+
+
 @csrf_exempt
 @api_view(['GET', 'POST'])
 @permission_classes([AllowAny])
@@ -300,23 +317,32 @@ def whatsapp_inbox_view(request):
 
     unified_rows = []
     for msg in inbound_rows:
+        caption = _extract_media_caption(msg)
+        media_payload = _extract_media_payload(msg.payload if isinstance(msg.payload, dict) else {}, msg.message_type)
+        media_asset = msg.media_asset if hasattr(msg, 'media_asset') else None
+
+        media_data = None
+        if media_payload or media_asset:
+            media_data = {
+                'asset_id': media_asset.id if media_asset else None,
+                'media_type': media_asset.media_type if media_asset else (msg.message_type if msg.message_type in {'image', 'video', 'document'} else ''),
+                'mime_type': media_asset.mime_type if media_asset else str(media_payload.get('mime_type') or '').strip(),
+                'status': media_asset.status if media_asset else 'not_downloaded',
+            }
+
         unified_rows.append({
             'wa_id': msg.from_wa_id,
             'message_id': msg.whatsapp_message_id,
             'type': msg.message_type,
-            'text': msg.text_body,
+            'text': msg.text_body or caption,
+            'caption': caption,
             'timestamp': msg.timestamp,
             'datetime_iso': datetime.fromtimestamp(msg.timestamp, tz=timezone.utc).isoformat() if msg.timestamp else None,
             'direction': 'inbound',
             'phone_number_id': msg.change.phone_number_id,
             'display_phone_number': msg.change.display_phone_number,
             'event_id': msg.change.entry.event_id,
-            'media': {
-                'asset_id': msg.media_asset.id,
-                'media_type': msg.media_asset.media_type,
-                'mime_type': msg.media_asset.mime_type,
-                'status': msg.media_asset.status,
-            } if hasattr(msg, 'media_asset') and msg.media_asset else None,
+            'media': media_data,
             'sort_key': msg.timestamp or int(msg.created_at.timestamp()),
         })
 

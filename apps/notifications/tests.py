@@ -134,6 +134,81 @@ class WebhookTests(TestCase):
         self.assertEqual(len(payload['conversation_list']), 1)
         self.assertEqual(payload['conversation_list'][0]['wa_id'], '554197393566')
 
+    def test_whatsapp_inbox_returns_media_caption_for_image_video_document(self):
+        """Retorna caption para mensagens de mídia (image, video, document)."""
+        payload = {
+            'object': 'whatsapp_business_account',
+            'entry': [{
+                'id': '102290129340398',
+                'changes': [{
+                    'value': {
+                        'messaging_product': 'whatsapp',
+                        'metadata': {
+                            'display_phone_number': '15550783881',
+                            'phone_number_id': '106540352242922',
+                        },
+                        'contacts': [{
+                            'profile': {'name': 'Sheena Nelson'},
+                            'wa_id': '16505551234',
+                        }],
+                        'messages': [
+                            {
+                                'from': '16505551234',
+                                'id': 'wamid.image.caption.1',
+                                'timestamp': '1744344496',
+                                'type': 'image',
+                                'image': {
+                                    'caption': 'Legenda da imagem',
+                                    'mime_type': 'image/jpeg',
+                                    'id': 'img-1',
+                                },
+                            },
+                            {
+                                'from': '16505551234',
+                                'id': 'wamid.video.caption.1',
+                                'timestamp': '1744344497',
+                                'type': 'video',
+                                'video': {
+                                    'caption': 'Legenda do video',
+                                    'mime_type': 'video/mp4',
+                                    'id': 'vid-1',
+                                },
+                            },
+                            {
+                                'from': '16505551234',
+                                'id': 'wamid.document.caption.1',
+                                'timestamp': '1744344498',
+                                'type': 'document',
+                                'document': {
+                                    'caption': 'Legenda do documento',
+                                    'mime_type': 'application/pdf',
+                                    'id': 'doc-1',
+                                },
+                            },
+                        ],
+                    },
+                    'field': 'messages',
+                }],
+            }],
+        }
+
+        WebhookHandlerService.log_webhook_event(payload)
+
+        url = reverse('notifications:whatsapp-inbox')
+        response = self.client.get(url, {'wa_id': '16505551234'})
+
+        self.assertEqual(response.status_code, 200)
+        messages = response.json()['ui_components']['message_timeline'][0]['messages']
+        by_type = {msg['type']: msg for msg in messages if msg['type'] in {'image', 'video', 'document'}}
+
+        self.assertEqual(by_type['image']['caption'], 'Legenda da imagem')
+        self.assertEqual(by_type['video']['caption'], 'Legenda do video')
+        self.assertEqual(by_type['document']['caption'], 'Legenda do documento')
+
+        self.assertEqual(by_type['image']['text'], 'Legenda da imagem')
+        self.assertEqual(by_type['video']['text'], 'Legenda do video')
+        self.assertEqual(by_type['document']['text'], 'Legenda do documento')
+
     def test_webhook_status_updates_outbound_message_to_recebido_and_lido(self):
         message_id = 'wamid.HBgLMTY1MDM4Nzk0MzkVAgARGBI3MTE5MjVBOTE3MDk5QUVFM0YA'
         outbound = WhatsAppOutboundMessage.objects.create(
