@@ -27,6 +27,7 @@ THIRD_PARTY_APPS = [
     'rest_framework',
     'rest_framework.authtoken',
     'corsheaders',
+    'storages',
 ]
 
 # Local apps
@@ -109,4 +110,37 @@ USE_TZ = True
 
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
+# Bucketeer / S3 storage configuration
+BUCKETEER_AWS_ACCESS_KEY_ID = os.getenv('BUCKETEER_AWS_ACCESS_KEY_ID', '')
+BUCKETEER_AWS_SECRET_ACCESS_KEY = os.getenv('BUCKETEER_AWS_SECRET_ACCESS_KEY', '')
+BUCKETEER_AWS_REGION = os.getenv('BUCKETEER_AWS_REGION', 'us-east-1')
+BUCKETEER_BUCKET_NAME = os.getenv('BUCKETEER_BUCKET_NAME', '')
+
+USE_S3_STORAGE = all([
+    BUCKETEER_AWS_ACCESS_KEY_ID,
+    BUCKETEER_AWS_SECRET_ACCESS_KEY,
+    BUCKETEER_BUCKET_NAME,
+])
+
+if USE_S3_STORAGE:
+    AWS_ACCESS_KEY_ID = BUCKETEER_AWS_ACCESS_KEY_ID
+    AWS_SECRET_ACCESS_KEY = BUCKETEER_AWS_SECRET_ACCESS_KEY
+    AWS_STORAGE_BUCKET_NAME = BUCKETEER_BUCKET_NAME
+    AWS_S3_REGION_NAME = BUCKETEER_AWS_REGION
+    AWS_S3_SIGNATURE_VERSION = 's3v4'
+    AWS_DEFAULT_ACL = None
+    AWS_QUERYSTRING_AUTH = True
+    AWS_S3_FILE_OVERWRITE = False
+
+    STORAGES = {
+        'default': {
+            'BACKEND': 'apps.notifications.storages.PrivateMediaStorage',
+        },
+        'staticfiles': {
+            'BACKEND': 'apps.notifications.storages.PublicStaticStorage',
+        },
+    }
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
