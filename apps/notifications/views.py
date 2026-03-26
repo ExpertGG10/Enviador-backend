@@ -14,8 +14,9 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.status import HTTP_200_OK, HTTP_400_BAD_REQUEST, HTTP_404_NOT_FOUND
+from django.shortcuts import get_object_or_404
 
-from .models import WhatsAppWebhookMessage, WhatsAppWebhookContact, WhatsAppOutboundMessage
+from .models import WhatsAppWebhookMessage, WhatsAppWebhookContact, WhatsAppOutboundMessage, WhatsAppMediaAsset
 from .services import WhatsAppAPIService, WebhookHandlerService
 from apps.auth_app.models import WhatsAppSender
 
@@ -284,7 +285,7 @@ def whatsapp_inbox_view(request):
 
     inbound_queryset = (
         WhatsAppWebhookMessage.objects
-        .select_related('change__entry__event')
+        .select_related('change__entry__event', 'media_asset')
         .order_by('-timestamp', '-created_at')
     )
     if wa_id_filter:
@@ -310,6 +311,12 @@ def whatsapp_inbox_view(request):
             'phone_number_id': msg.change.phone_number_id,
             'display_phone_number': msg.change.display_phone_number,
             'event_id': msg.change.entry.event_id,
+            'media': {
+                'asset_id': msg.media_asset.id,
+                'media_type': msg.media_asset.media_type,
+                'mime_type': msg.media_asset.mime_type,
+                'status': msg.media_asset.status,
+            } if hasattr(msg, 'media_asset') and msg.media_asset else None,
             'sort_key': msg.timestamp or int(msg.created_at.timestamp()),
         })
 
@@ -387,6 +394,52 @@ def whatsapp_inbox_view(request):
         }
     }
     return Response(payload, status=HTTP_200_OK)
+
+
+@require_http_methods(["GET"])
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def whatsapp_media_access_view(request, asset_id: int):
+    """Retorna URL de acesso da mídia salva no storage para uso do frontend."""
+    logger.info('[MEDIA ACCESS] Requisição recebida user_id=%s asset_id=%s', getattr(request.user, 'id', None), asset_id)
+    asset = get_object_or_404(WhatsAppMediaAsset, id=asset_id)
+
+    if asset.status != 'ready' or not asset.file:
+        logger.warning(
+            '[MEDIA ACCESS] Asset indisponível asset_id=%s status=%s has_file=%s error=%s',
+            asset.id,
+            asset.status,
+            bool(asset.file),
+            asset.error_message,
+        )
+        return Response(
+            {
+                'asset_id': asset.id,
+                'status': asset.status,
+                'error': asset.error_message,
+            },
+            status=HTTP_404_NOT_FOUND,
+        )
+
+    logger.info(
+        '[MEDIA ACCESS] URL gerada asset_id=%s media_type=%s mime_type=%s',
+        asset.id,
+        asset.media_type,
+        asset.mime_type,
+    )
+
+    return Response(
+        {
+            'asset_id': asset.id,
+            'status': asset.status,
+            'media_type': asset.media_type,
+            'mime_type': asset.mime_type,
+            'url': asset.file.url,
+            'file_size_bytes': asset.file_size_bytes,
+            'whatsapp_message_id': asset.whatsapp_message_id,
+        },
+        status=HTTP_200_OK,
+    )
 
 
 @require_http_methods(["POST"])

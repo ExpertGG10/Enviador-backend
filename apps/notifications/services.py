@@ -4,6 +4,11 @@ import os
 import requests
 import logging
 import json
+import re
+
+from django.core.files.base import ContentFile
+
+from apps.auth_app.models import WhatsAppSender
 
 from .models import (
     WhatsAppWebhookEvent,
@@ -12,6 +17,7 @@ from .models import (
     WhatsAppWebhookContact,
     WhatsAppWebhookMessage,
     WhatsAppOutboundMessage,
+    WhatsAppMediaAsset,
 )
 
 logger = logging.getLogger(__name__)
@@ -179,6 +185,8 @@ class WhatsAppAPIService:
 class WebhookHandlerService:
     """Serviço para processar webhooks."""
 
+    BASE_URL = 'https://graph.facebook.com/v22.0'
+
     @staticmethod
     def _map_status(raw_status: str) -> str:
         status_key = str(raw_status or '').strip().lower()
@@ -228,6 +236,128 @@ class WebhookHandlerService:
             message_id,
             mapped_status,
         )
+
+    @staticmethod
+    def _build_media_filename(message_id: str, mime_type: str) -> str:
+        sanitized_message_id = re.sub(r'[^a-zA-Z0-9._-]', '_', str(message_id or 'media'))
+        extension_by_mime = {
+            'image/jpeg': 'jpg',
+            'image/jpg': 'jpg',
+            'image/png': 'png',
+            'image/webp': 'webp',
+            'image/gif': 'gif',
+        }
+        extension = extension_by_mime.get(str(mime_type or '').lower(), 'bin')
+        return f'{sanitized_message_id}.{extension}'
+
+    @staticmethod
+    def _get_sender_access_token(phone_number_id: str) -> str:
+        logger.info('[WEBHOOK MEDIA] Procurando sender para phone_number_id=%s', phone_number_id)
+        sender = (
+            WhatsAppSender.objects
+            .filter(phone_number_id=str(phone_number_id or '').strip())
+            .order_by('-created_at')
+            .first()
+        )
+        if not sender:
+            logger.warning('[WEBHOOK MEDIA] Sender não encontrado para phone_number_id=%s', phone_number_id)
+            return ''
+        try:
+            token = sender.get_access_token()
+            logger.info(
+                '[WEBHOOK MEDIA] Sender encontrado id=%s token_len=%s',
+                sender.id,
+                len(token or ''),
+            )
+            return token
+        except Exception:
+            logger.exception('[WEBHOOK MEDIA] Falha ao descriptografar access token para phone_number_id=%s', phone_number_id)
+            return ''
+
+    @staticmethod
+    def _resolve_media_url(media_payload: dict, phone_number_id: str, access_token: str) -> str:
+        direct_url = str(media_payload.get('url') or '').strip()
+        if direct_url:
+            logger.info('[WEBHOOK MEDIA] URL direta encontrada no payload para media_id=%s', media_payload.get('id'))
+            return direct_url
+
+        media_id = str(media_payload.get('id') or '').strip()
+        if not media_id or not access_token:
+            return ''
+
+        request_url = f"{WebhookHandlerService.BASE_URL}/{media_id}"
+        params = {'phone_number_id': str(phone_number_id or '').strip()} if phone_number_id else None
+        headers = {'Authorization': f'Bearer {access_token}'}
+        try:
+            logger.info('[WEBHOOK MEDIA] Consultando URL da mídia na Meta media_id=%s phone_number_id=%s', media_id, phone_number_id)
+            resp = requests.get(request_url, headers=headers, params=params, timeout=15)
+            if not resp.ok:
+                logger.warning('[WEBHOOK MEDIA] Falha ao obter URL da mídia id=%s status=%s body=%s', media_id, resp.status_code, resp.text)
+                return ''
+            payload = resp.json()
+            resolved_url = str(payload.get('url') or '').strip()
+            logger.info('[WEBHOOK MEDIA] URL da mídia resolvida media_id=%s has_url=%s', media_id, bool(resolved_url))
+            return resolved_url
+        except requests.RequestException:
+            logger.exception('[WEBHOOK MEDIA] Erro ao obter URL da mídia id=%s', media_id)
+            return ''
+
+    @staticmethod
+    def _download_and_store_image_asset(asset: WhatsAppMediaAsset, media_payload: dict, change: WhatsAppWebhookChange):
+        logger.info(
+            '[WEBHOOK MEDIA] Iniciando processamento do asset id=%s message_id=%s media_id=%s',
+            asset.id,
+            asset.whatsapp_message_id,
+            asset.media_id,
+        )
+        access_token = WebhookHandlerService._get_sender_access_token(change.phone_number_id)
+        if not access_token:
+            asset.status = 'failed'
+            asset.error_message = 'Access token não encontrado para phone_number_id'
+            asset.save(update_fields=['status', 'error_message', 'updated_at'])
+            logger.warning('[WEBHOOK MEDIA] Asset id=%s falhou por ausência de access token', asset.id)
+            return
+
+        media_url = WebhookHandlerService._resolve_media_url(media_payload, change.phone_number_id, access_token)
+        if not media_url:
+            asset.status = 'failed'
+            asset.error_message = 'Não foi possível resolver a URL da mídia'
+            asset.save(update_fields=['status', 'error_message', 'updated_at'])
+            logger.warning('[WEBHOOK MEDIA] Asset id=%s falhou por URL não resolvida', asset.id)
+            return
+
+        headers = {'Authorization': f'Bearer {access_token}'}
+        try:
+            logger.info('[WEBHOOK MEDIA] Baixando mídia asset_id=%s media_id=%s', asset.id, asset.media_id)
+            resp = requests.get(media_url, headers=headers, timeout=30)
+            if not resp.ok:
+                asset.status = 'failed'
+                asset.error_message = f'Download da mídia falhou com status {resp.status_code}'
+                asset.save(update_fields=['status', 'error_message', 'updated_at'])
+                logger.warning('[WEBHOOK MEDIA] Download falhou media_id=%s status=%s', asset.media_id, resp.status_code)
+                return
+
+            mime_type = str(asset.mime_type or media_payload.get('mime_type') or '').strip()
+            file_name = WebhookHandlerService._build_media_filename(asset.whatsapp_message_id, mime_type)
+            asset.file.save(file_name, ContentFile(resp.content), save=False)
+            asset.file_size_bytes = len(resp.content)
+            asset.status = 'ready'
+            asset.error_message = ''
+            payload_data = dict(asset.payload or {})
+            payload_data['download_source_url'] = media_url
+            asset.payload = payload_data
+            asset.save(update_fields=['file', 'file_size_bytes', 'status', 'error_message', 'payload', 'updated_at'])
+            logger.info(
+                '[WEBHOOK MEDIA] Asset salvo com sucesso asset_id=%s file=%s size=%s',
+                asset.id,
+                asset.file.name,
+                asset.file_size_bytes,
+            )
+        except requests.RequestException:
+            asset.status = 'failed'
+            asset.error_message = 'Erro de rede ao baixar mídia da Meta'
+            asset.save(update_fields=['status', 'error_message', 'updated_at'])
+            logger.exception('[WEBHOOK MEDIA] Erro de rede ao baixar mídia media_id=%s', asset.media_id)
     
     @staticmethod
     def parse_webhook_event(data):
@@ -340,7 +470,7 @@ class WebhookHandlerService:
                     for message_idx, message_payload in enumerate(value.get('messages', [])):
                         text_content = (message_payload.get('text') or {}).get('body', '')
                         msg_timestamp = message_payload.get('timestamp')
-                        WhatsAppWebhookMessage.objects.create(
+                        webhook_message = WhatsAppWebhookMessage.objects.create(
                             change=change,
                             message_index=message_idx,
                             whatsapp_message_id=message_payload.get('id', ''),
@@ -350,6 +480,31 @@ class WebhookHandlerService:
                             text_body=text_content,
                             payload=message_payload,
                         )
+
+                        if str(message_payload.get('type') or '').lower() == 'image':
+                            image_payload = message_payload.get('image') or {}
+                            logger.info(
+                                '[WEBHOOK MEDIA] Mensagem de imagem detectada message_id=%s media_id=%s mime_type=%s',
+                                webhook_message.whatsapp_message_id,
+                                image_payload.get('id'),
+                                image_payload.get('mime_type'),
+                            )
+                            media_asset = WhatsAppMediaAsset.objects.create(
+                                webhook_message=webhook_message,
+                                whatsapp_message_id=webhook_message.whatsapp_message_id,
+                                media_id=str(image_payload.get('id') or '').strip(),
+                                media_type='image',
+                                mime_type=str(image_payload.get('mime_type') or '').strip(),
+                                sha256=str(image_payload.get('sha256') or '').strip(),
+                                status='pending',
+                                payload=image_payload,
+                            )
+                            logger.info(
+                                '[WEBHOOK MEDIA] Asset criado id=%s message_id=%s',
+                                media_asset.id,
+                                media_asset.whatsapp_message_id,
+                            )
+                            WebhookHandlerService._download_and_store_image_asset(media_asset, image_payload, change)
 
                     for status_payload in value.get('statuses', []):
                         WebhookHandlerService._update_outbound_status(status_payload, change)
