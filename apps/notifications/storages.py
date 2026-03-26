@@ -7,7 +7,7 @@ class PrivateMediaStorage(S3Boto3Storage):
     """Storage privado para uploads e mídias sensíveis."""
 
     location = 'media'
-    default_acl = 'private'
+    default_acl = None
     file_overwrite = False
     querystring_auth = True
 
@@ -16,6 +16,6 @@ class PublicStaticStorage(S3Boto3Storage):
     """Storage público para arquivos estáticos versionáveis."""
 
     location = 'static'
-    default_acl = 'public-read'
+    default_acl = None
     file_overwrite = True
     querystring_auth = False
