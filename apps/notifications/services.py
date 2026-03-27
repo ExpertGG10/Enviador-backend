@@ -384,7 +384,13 @@ class WebhookHandlerService:
                 return
 
             mime_type = str(asset.mime_type or media_payload.get('mime_type') or '').strip()
-            file_name = WebhookHandlerService._build_media_filename(asset.whatsapp_message_id, mime_type)
+            filename_hint = media_payload.get('filename') if asset.media_type == 'document' else None
+            file_name = WebhookHandlerService._build_media_filename(
+                asset.whatsapp_message_id, 
+                mime_type, 
+                asset.media_type,
+                filename_hint
+            )
             asset.file.save(file_name, ContentFile(resp.content), save=False)
             asset.file_size_bytes = len(resp.content)
             asset.status = 'ready'
