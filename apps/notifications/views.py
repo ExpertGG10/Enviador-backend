@@ -18,6 +18,7 @@ from django.shortcuts import get_object_or_404
 
 from .models import WhatsAppWebhookMessage, WhatsAppWebhookContact, WhatsAppOutboundMessage, WhatsAppMediaAsset
 from .services import WhatsAppAPIService, WebhookHandlerService
+from .media_registry import MediaTypeRegistry
 from apps.auth_app.models import WhatsAppSender
 
 import logging
@@ -56,16 +57,27 @@ def _build_contact_name_map(wa_ids):
 
 
 def _extract_media_payload(message_payload: dict, message_type: str) -> dict:
-    """Retorna o bloco de mídia do payload para tipos suportados."""
+    """Retorna o bloco de mídia do payload para tipos suportados.
+    
+    Usa MediaTypeRegistry para determinar tipos válidos e chaves de payload.
+    """
     message_type = (message_type or '').lower()
-    if message_type not in {'image', 'video', 'document'}:
+    if not MediaTypeRegistry.is_supported(message_type):
         return {}
-    media_payload = message_payload.get(message_type)
+    
+    payload_key = MediaTypeRegistry.get_payload_key(message_type)
+    media_payload = message_payload.get(payload_key)
     return media_payload if isinstance(media_payload, dict) else {}
 
 
 def _extract_media_caption(message: WhatsAppWebhookMessage) -> str:
-    """Extrai caption de image/video/document armazenados no payload do webhook."""
+    """Extrai caption de mídia armazenados no payload do webhook.
+    
+    Retorna empty string se o tipo de mídia não suporta caption (ex: audio).
+    """
+    if not MediaTypeRegistry.supports_caption(message.message_type):
+        return ''
+    
     payload = message.payload if isinstance(message.payload, dict) else {}
     media_payload = _extract_media_payload(payload, message.message_type)
     caption = media_payload.get('caption')

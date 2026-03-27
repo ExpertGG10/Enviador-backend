@@ -9,6 +9,7 @@ import re
 from django.core.files.base import ContentFile
 
 from apps.auth_app.models import WhatsAppSender
+from .media_registry import MediaTypeRegistry
 
 from .models import (
     WhatsAppWebhookEvent,
@@ -238,16 +239,61 @@ class WebhookHandlerService:
         )
 
     @staticmethod
-    def _build_media_filename(message_id: str, mime_type: str) -> str:
+    def _build_media_filename(message_id: str, mime_type: str, media_type: str, filename_hint: str = None) -> str:
+        """Constrói nome de arquivo para mídia com suporte a todos os tipos.
+        
+        Args:
+            message_id: ID da mensagem WhatsApp
+            mime_type: MIME type da mídia (ex: image/jpeg, audio/ogg)
+            media_type: Tipo de mídia (image, video, document, audio)
+            filename_hint: Nome de arquivo opcional (usado para document)
+        
+        Returns:
+            Nome de arquivo sanitizado com extensão apropriada
+        """
         sanitized_message_id = re.sub(r'[^a-zA-Z0-9._-]', '_', str(message_id or 'media'))
+        
+        # Se documento vem com filename, usar como base (com sanitização)
+        if filename_hint and media_type == 'document':
+            safe_filename = re.sub(r'[^a-zA-Z0-9._-]', '_', str(filename_hint).strip())
+            if safe_filename:
+                return safe_filename
+        
+        # Mapping MIME type → extensão (cobre todos os tipos)
         extension_by_mime = {
+            # Imagens
             'image/jpeg': 'jpg',
             'image/jpg': 'jpg',
             'image/png': 'png',
             'image/webp': 'webp',
             'image/gif': 'gif',
+            'image/bmp': 'bmp',
+            # Vídeo
+            'video/mp4': 'mp4',
+            'video/quicktime': 'mov',
+            'video/x-msvideo': 'avi',
+            'video/x-matroska': 'mkv',
+            'video/ogg': 'ogv',
+            # Áudio
+            'audio/mpeg': 'mp3',
+            'audio/ogg': 'ogg',
+            'audio/mp4': 'm4a',
+            'audio/wav': 'wav',
+            'audio/webm': 'webm',
+            'audio/aac': 'aac',
+            # Documento
+            'application/pdf': 'pdf',
+            'application/msword': 'doc',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+            'application/vnd.ms-excel': 'xls',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+            'text/plain': 'txt',
         }
-        extension = extension_by_mime.get(str(mime_type or '').lower(), 'bin')
+        
+        # Tentar extensão via MIME, fallback para tipo de mídia, fallback para 'bin'
+        mime_lower = str(mime_type or '').lower()
+        extension = extension_by_mime.get(mime_lower) or MediaTypeRegistry.get_default_extension(media_type)
+        
         return f'{sanitized_message_id}.{extension}'
 
     @staticmethod
@@ -303,7 +349,7 @@ class WebhookHandlerService:
             return ''
 
     @staticmethod
-    def _download_and_store_image_asset(asset: WhatsAppMediaAsset, media_payload: dict, change: WhatsAppWebhookChange):
+    def _download_and_store_media_asset(asset: WhatsAppMediaAsset, media_payload: dict, change: WhatsAppWebhookChange):
         logger.info(
             '[WEBHOOK MEDIA] Iniciando processamento do asset id=%s message_id=%s media_id=%s',
             asset.id,
@@ -481,30 +527,40 @@ class WebhookHandlerService:
                             payload=message_payload,
                         )
 
-                        if str(message_payload.get('type') or '').lower() == 'image':
-                            image_payload = message_payload.get('image') or {}
+                        msg_type = str(message_payload.get('type') or '').lower()
+                        if MediaTypeRegistry.is_supported(msg_type):
+                            media_config = MediaTypeRegistry.get(msg_type)
+                            media_payload_key = media_config.payload_key
+                            media_payload = message_payload.get(media_payload_key) or {}
+                            
                             logger.info(
-                                '[WEBHOOK MEDIA] Mensagem de imagem detectada message_id=%s media_id=%s mime_type=%s',
+                                '[WEBHOOK MEDIA] Mensagem de mídia detectada message_id=%s media_type=%s media_id=%s mime_type=%s',
                                 webhook_message.whatsapp_message_id,
-                                image_payload.get('id'),
-                                image_payload.get('mime_type'),
+                                msg_type,
+                                media_payload.get('id'),
+                                media_payload.get('mime_type'),
                             )
+                            
+                            # Extrair filename se documento
+                            filename_hint = media_payload.get('filename') if media_config.supports_filename else None
+                            
                             media_asset = WhatsAppMediaAsset.objects.create(
                                 webhook_message=webhook_message,
                                 whatsapp_message_id=webhook_message.whatsapp_message_id,
-                                media_id=str(image_payload.get('id') or '').strip(),
-                                media_type='image',
-                                mime_type=str(image_payload.get('mime_type') or '').strip(),
-                                sha256=str(image_payload.get('sha256') or '').strip(),
+                                media_id=str(media_payload.get('id') or '').strip(),
+                                media_type=msg_type,
+                                mime_type=str(media_payload.get('mime_type') or '').strip(),
+                                sha256=str(media_payload.get('sha256') or '').strip(),
                                 status='pending',
-                                payload=image_payload,
+                                payload=media_payload,
                             )
                             logger.info(
-                                '[WEBHOOK MEDIA] Asset criado id=%s message_id=%s',
+                                '[WEBHOOK MEDIA] Asset criado id=%s message_id=%s media_type=%s',
                                 media_asset.id,
                                 media_asset.whatsapp_message_id,
+                                msg_type,
                             )
-                            WebhookHandlerService._download_and_store_image_asset(media_asset, image_payload, change)
+                            WebhookHandlerService._download_and_store_media_asset(media_asset, media_payload, change)
 
                     for status_payload in value.get('statuses', []):
                         WebhookHandlerService._update_outbound_status(status_payload, change)

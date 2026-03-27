@@ -6,3 +6,4 @@ db.sqlite3
 .chat-guides/
 enviador.log
 staticfiles/
+/docs
