@@ -9,6 +9,7 @@ from rest_framework.status import (
     HTTP_401_UNAUTHORIZED, HTTP_404_NOT_FOUND
 )
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.authentication import TokenAuthentication
 import logging
 from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
@@ -198,6 +199,7 @@ class ListUsersView(APIView):
 
 class AccountSettingsView(APIView):
     """Endpoint para obter/atualizar configurações da conta do usuário autenticado."""
+    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def _build_response_payload(self, request):
@@ -366,6 +368,7 @@ class AccountSettingsView(APIView):
 
 class GmailSenderListCreateView(APIView):
     """CRUD de remetentes Gmail no escopo de conta."""
+    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -379,6 +382,7 @@ class GmailSenderListCreateView(APIView):
 
 class GmailSenderDetailView(APIView):
     """Atualizar/deletar remetente Gmail."""
+    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def _get_sender(self, request, sender_id):
@@ -410,6 +414,7 @@ class GmailSenderDetailView(APIView):
 
 class GmailTemplateListCreateView(APIView):
     """CRUD de templates Gmail por remetente."""
+    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def _get_sender(self, request, sender_id):
@@ -433,6 +438,7 @@ class GmailTemplateListCreateView(APIView):
 
 class GmailTemplateDetailView(APIView):
     """Atualizar/deletar template Gmail por remetente."""
+    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def _get_template(self, request, sender_id, template_id):
@@ -469,6 +475,7 @@ class GmailTemplateDetailView(APIView):
 
 class WhatsAppSenderListCreateView(APIView):
     """CRUD de remetentes WhatsApp no escopo de conta."""
+    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -482,6 +489,7 @@ class WhatsAppSenderListCreateView(APIView):
 
 class WhatsAppSenderDetailView(APIView):
     """Atualizar/deletar remetente WhatsApp."""
+    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def _get_sender(self, request, sender_id):
@@ -513,6 +521,7 @@ class WhatsAppSenderDetailView(APIView):
 
 class WhatsAppTemplateListCreateView(APIView):
     """CRUD de templates WhatsApp por remetente."""
+    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def _get_sender(self, request, sender_id):
@@ -536,6 +545,7 @@ class WhatsAppTemplateListCreateView(APIView):
 
 class WhatsAppTemplateDetailView(APIView):
     """Atualizar/deletar template WhatsApp por remetente."""
+    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def _get_template(self, request, sender_id, template_id):
@@ -572,6 +582,7 @@ class WhatsAppTemplateDetailView(APIView):
 
 class WhatsAppTemplatePreviewView(APIView):
     """Busca os detalhes de um template WhatsApp na Graph API para preview e seleção de variáveis."""
+    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     GRAPH_API_VERSION = 'v22.0'
