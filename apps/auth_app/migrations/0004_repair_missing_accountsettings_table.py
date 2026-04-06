@@ -2,7 +2,13 @@ from django.db import migrations
 
 
 def ensure_accountsettings_table(apps, schema_editor):
-    AccountSettings = apps.get_model('auth_app', 'AccountSettings')
+    try:
+        AccountSettings = apps.get_model('auth_app', 'AccountSettings')
+    except LookupError:
+        # This branch can be applied after migrations that delete AccountSettings.
+        # In that case, this repair step should be a harmless no-op.
+        return
+
     table_name = AccountSettings._meta.db_table
 
     existing_tables = schema_editor.connection.introspection.table_names()
