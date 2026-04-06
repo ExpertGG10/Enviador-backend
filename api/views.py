@@ -56,13 +56,16 @@ def _is_masked_secret(value) -> bool:
 def _sanitize_email_credentials(payload: dict) -> dict:
     """Normaliza credenciais de e-mail para evitar uso acidental de placeholders."""
     app_password = payload.get('app_password')
+    print(f"[DEBUG] Original app_password: {app_password}")
 
     if isinstance(app_password, str):
         payload['app_password'] = app_password.strip()
         app_password = payload['app_password']
+        print(f"[DEBUG] Stripped app_password: {app_password}")
 
     if _is_masked_secret(app_password):
         payload['app_password'] = ''
+        print(f"[DEBUG] Masked app_password detected, clearing value")
 
     return payload
 
