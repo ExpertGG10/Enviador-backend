@@ -617,7 +617,13 @@ def send_view(request):
     if channel not in ('email', 'whatsapp'):
         return JsonResponse({'error': 'Invalid channel'}, status=400)
 
+    if channel == 'email':
+        payload = _sanitize_email_credentials(payload)
+
     payload = _apply_sender_fallback(payload, request.user)
+
+    if channel == 'email':
+        payload = _sanitize_email_credentials(payload)
 
     if channel == 'email':
         payload, sender_error = _resolve_email_sender_payload(payload, request.user)
@@ -782,11 +788,17 @@ def jobs_start_view(request):
         except json.JSONDecodeError:
             return HttpResponseBadRequest('Invalid JSON')
 
-    payload = _apply_sender_fallback(payload, request.user)
-
     channel = payload.get('channel', 'email')
     if channel not in ('email', 'whatsapp'):
         return JsonResponse({'error': 'Invalid channel'}, status=400)
+
+    if channel == 'email':
+        payload = _sanitize_email_credentials(payload)
+
+    payload = _apply_sender_fallback(payload, request.user)
+
+    if channel == 'email':
+        payload = _sanitize_email_credentials(payload)
 
     if channel == 'email':
         sender_id = payload.get('sender_id')
@@ -797,11 +809,12 @@ def jobs_start_view(request):
                 return JsonResponse({'error': 'Gmail sender not found'}, status=404)
 
             payload['email_sender'] = gmail_sender.sender_email
-            if not payload.get('app_password'):
-                try:
-                    payload['app_password'] = gmail_sender.get_app_password()
-                except Exception:
-                    return JsonResponse({'error': 'Unable to decrypt app password for sender_id'}, status=400)
+            try:
+                # Com sender_id, sempre forçamos a credencial salva do remetente.
+                # Isso evita usar placeholders mascarados enviados pelo frontend.
+                payload['app_password'] = gmail_sender.get_app_password()
+            except Exception:
+                return JsonResponse({'error': 'Unable to decrypt app password for sender_id'}, status=400)
 
         if not payload.get('email_sender'):
             return JsonResponse({'error': 'email_sender is required for email channel'}, status=400)
