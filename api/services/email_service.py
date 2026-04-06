@@ -280,6 +280,7 @@ class EmailService:
             sender = SimpleSender(email_sender)
             
             # Create EmailService instance
+            print(f"[DEBUG] Initializing EmailService with sender: {sender.email} e {app_password}")
             email_service = EmailService(sender, app_password)
             
             # Build maps of uploaded files for fast lookup by full name and by basename (without extension)
