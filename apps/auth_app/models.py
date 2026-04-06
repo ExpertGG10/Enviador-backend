@@ -10,32 +10,6 @@ from shared.utils.crypto import decrypt_password, encrypt_password
 # Sem modelos adicionais necessários nesta app
 
 
-class AccountSettings(models.Model):
-	"""Configurações de conta por usuário para envio de mensagens."""
-
-	user = models.OneToOneField(
-		User,
-		on_delete=models.CASCADE,
-		related_name='account_settings'
-	)
-	gmail_sender_email = models.EmailField(blank=True, default='')
-	gmail_app_password = models.CharField(max_length=255, blank=True, default='')
-	whatsapp_phone_number = models.CharField(max_length=32, blank=True, default='')
-	whatsapp_access_token = models.TextField(blank=True, default='')
-	whatsapp_phone_number_id = models.CharField(max_length=64, blank=True, default='')
-	whatsapp_business_id = models.CharField(max_length=64, blank=True, default='')
-	whatsapp_templates = models.JSONField(default=list, blank=True)
-	created_at = models.DateTimeField(auto_now_add=True)
-	updated_at = models.DateTimeField(auto_now=True)
-
-	class Meta:
-		verbose_name = 'Account Settings'
-		verbose_name_plural = 'Account Settings'
-
-	def __str__(self):
-		return f"AccountSettings({self.user.username})"
-
-
 class GmailSender(models.Model):
 	"""Remetente de Gmail por usuário."""
 
@@ -104,7 +78,7 @@ class WhatsAppSender(models.Model):
 	phone_number = models.CharField(max_length=30)
 	access_token_encrypted = models.TextField(blank=True, default='')
 	phone_number_id = models.CharField(max_length=120)
-	business_id = models.CharField(max_length=120)
+	waba_id = models.CharField(max_length=120)
 	created_at = models.DateTimeField(auto_now_add=True)
 	updated_at = models.DateTimeField(auto_now=True)
 
@@ -136,7 +110,6 @@ class WhatsAppTemplate(models.Model):
 		related_name='templates'
 	)
 	title = models.CharField(max_length=120)
-	content = models.TextField()
 	created_at = models.DateTimeField(auto_now_add=True)
 	updated_at = models.DateTimeField(auto_now=True)
 

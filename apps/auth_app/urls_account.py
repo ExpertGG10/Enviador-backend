@@ -11,6 +11,7 @@ from .views import (
     WhatsAppSenderDetailView,
     WhatsAppTemplateListCreateView,
     WhatsAppTemplateDetailView,
+    WhatsAppTemplatePreviewView,
 )
 
 urlpatterns = [
@@ -23,4 +24,5 @@ urlpatterns = [
     path('whatsapp/senders/<uuid:sender_id>/', WhatsAppSenderDetailView.as_view(), name='whatsapp-sender-detail'),
     path('whatsapp/senders/<uuid:sender_id>/templates/', WhatsAppTemplateListCreateView.as_view(), name='whatsapp-template-list-create'),
     path('whatsapp/senders/<uuid:sender_id>/templates/<uuid:template_id>/', WhatsAppTemplateDetailView.as_view(), name='whatsapp-template-detail'),
+    path('whatsapp/senders/<uuid:sender_id>/templates/<str:template_name>/preview/', WhatsAppTemplatePreviewView.as_view(), name='whatsapp-template-preview'),
 ]

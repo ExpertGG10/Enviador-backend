@@ -13,10 +13,13 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.status import HTTP_200_OK, HTTP_400_BAD_REQUEST
+from rest_framework.status import HTTP_200_OK, HTTP_400_BAD_REQUEST, HTTP_404_NOT_FOUND
+from django.shortcuts import get_object_or_404
 
-from .models import WhatsAppWebhookMessage, WhatsAppWebhookContact, WhatsAppOutboundMessage
+from .models import WhatsAppWebhookMessage, WhatsAppWebhookContact, WhatsAppOutboundMessage, WhatsAppMediaAsset
 from .services import WhatsAppAPIService, WebhookHandlerService
+from .media_registry import MediaTypeRegistry
+from apps.auth_app.models import WhatsAppSender
 
 import logging
 
@@ -51,6 +54,34 @@ def _build_contact_name_map(wa_ids):
             names_by_wa_id[contact.wa_id] = contact.profile_name
 
     return names_by_wa_id
+
+
+def _extract_media_payload(message_payload: dict, message_type: str) -> dict:
+    """Retorna o bloco de mídia do payload para tipos suportados.
+    
+    Usa MediaTypeRegistry para determinar tipos válidos e chaves de payload.
+    """
+    message_type = (message_type or '').lower()
+    if not MediaTypeRegistry.is_supported(message_type):
+        return {}
+    
+    payload_key = MediaTypeRegistry.get_payload_key(message_type)
+    media_payload = message_payload.get(payload_key)
+    return media_payload if isinstance(media_payload, dict) else {}
+
+
+def _extract_media_caption(message: WhatsAppWebhookMessage) -> str:
+    """Extrai caption de mídia armazenados no payload do webhook.
+    
+    Retorna empty string se o tipo de mídia não suporta caption (ex: audio).
+    """
+    if not MediaTypeRegistry.supports_caption(message.message_type):
+        return ''
+    
+    payload = message.payload if isinstance(message.payload, dict) else {}
+    media_payload = _extract_media_payload(payload, message.message_type)
+    caption = media_payload.get('caption')
+    return str(caption).strip() if caption is not None else ''
 
 
 @csrf_exempt
@@ -128,7 +159,7 @@ def _send_whatsapp_reply(phone_number_id: str, to: str, received_body: str):
         logger.warning('Resposta automática ignorada: TOKEN, phone_number_id ou destinatário ausente')
         return
 
-    reply_text = 'ola' if 'ola' in _normalize(received_body) else 'Nem me deu ola'
+    reply_text = 'teste correto'
 
     url = f'https://graph.facebook.com/v22.0/{phone_number_id}/messages'
     payload = {
@@ -142,47 +173,43 @@ def _send_whatsapp_reply(phone_number_id: str, to: str, received_body: str):
         'Content-Type': 'application/json',
         'Authorization': f'Bearer {access_token}',
     }
-
-    try:
-        resp = requests.post(url, json=payload, headers=headers, timeout=10)
-        logger.info(f'Resposta enviada para {to}: "{reply_text}" | status={resp.status_code}')
+    if 'teste' in _normalize(received_body):
         try:
-            response_payload = resp.json()
-        except ValueError:
-            response_payload = {'raw_text': resp.text}
+            resp = requests.post(url, json=payload, headers=headers, timeout=10)
+            logger.info(f'Resposta enviada para {to}: "{reply_text}" | status={resp.status_code}')
+            
+            # Salvar apenas se a mensagem foi enviada com sucesso
+            if resp.ok:
+                try:
+                    response_payload = resp.json()
+                except ValueError:
+                    response_payload = {'raw_text': resp.text}
 
-        status_value = 'sent' if resp.ok else 'failed'
-        whatsapp_message_id = ''
-        if resp.ok:
-            whatsapp_message_id = (
-                response_payload.get('messages', [{}])[0].get('id', '')
-                if isinstance(response_payload, dict)
-                else ''
-            )
+                whatsapp_message_id = (
+                    response_payload.get('messages', [{}])[0].get('id', '')
+                    if isinstance(response_payload, dict)
+                    else ''
+                )
 
-        WhatsAppOutboundMessage.objects.create(
-            to_wa_id=to,
-            text_body=reply_text,
-            whatsapp_message_id=whatsapp_message_id,
-            phone_number_id=phone_number_id,
-            status=status_value,
-            sent_by=None,
-            payload=response_payload if isinstance(response_payload, dict) else {'response': response_payload},
-        )
-
-        if not resp.ok:
-            logger.warning(f'Erro na resposta automática: {resp.text}')
-    except requests.RequestException as exc:
-        WhatsAppOutboundMessage.objects.create(
-            to_wa_id=to,
-            text_body=reply_text,
-            whatsapp_message_id='',
-            phone_number_id=phone_number_id,
-            status='failed',
-            sent_by=None,
-            payload={'error': str(exc)},
-        )
-        logger.exception('Falha ao enviar resposta automática WhatsApp')
+                WhatsAppOutboundMessage.objects.create(
+                    to_wa_id=to,
+                    text_body=reply_text,
+                    whatsapp_message_id=whatsapp_message_id,
+                    phone_number_id=phone_number_id,
+                    status='enviado',
+                    sent_by=None,
+                    payload=response_payload if isinstance(response_payload, dict) else {'response': response_payload},
+                )
+            else:
+                # Erro na resposta - não salva, apenas registra no log
+                try:
+                    error_response = resp.json()
+                except ValueError:
+                    error_response = {'raw_text': resp.text}
+                logger.warning(f'Erro na resposta automática: {error_response}')
+        except requests.RequestException as exc:
+            # Erro de conexão - não salva, apenas registra no log
+            logger.exception(f'Falha ao enviar resposta automática WhatsApp para {to}: {str(exc)}')
 
 
 class WhatsAppTestView(APIView):
@@ -287,7 +314,7 @@ def whatsapp_inbox_view(request):
 
     inbound_queryset = (
         WhatsAppWebhookMessage.objects
-        .select_related('change__entry__event')
+        .select_related('change__entry__event', 'media_asset')
         .order_by('-timestamp', '-created_at')
     )
     if wa_id_filter:
@@ -302,17 +329,32 @@ def whatsapp_inbox_view(request):
 
     unified_rows = []
     for msg in inbound_rows:
+        caption = _extract_media_caption(msg)
+        media_payload = _extract_media_payload(msg.payload if isinstance(msg.payload, dict) else {}, msg.message_type)
+        media_asset = msg.media_asset if hasattr(msg, 'media_asset') else None
+
+        media_data = None
+        if media_payload or media_asset:
+            media_data = {
+                'asset_id': media_asset.id if media_asset else None,
+                'media_type': media_asset.media_type if media_asset else (msg.message_type if msg.message_type in {'image', 'video', 'document'} else ''),
+                'mime_type': media_asset.mime_type if media_asset else str(media_payload.get('mime_type') or '').strip(),
+                'status': media_asset.status if media_asset else 'not_downloaded',
+            }
+
         unified_rows.append({
             'wa_id': msg.from_wa_id,
             'message_id': msg.whatsapp_message_id,
             'type': msg.message_type,
-            'text': msg.text_body,
+            'text': msg.text_body or caption,
+            'caption': caption,
             'timestamp': msg.timestamp,
             'datetime_iso': datetime.fromtimestamp(msg.timestamp, tz=timezone.utc).isoformat() if msg.timestamp else None,
             'direction': 'inbound',
             'phone_number_id': msg.change.phone_number_id,
             'display_phone_number': msg.change.display_phone_number,
             'event_id': msg.change.entry.event_id,
+            'media': media_data,
             'sort_key': msg.timestamp or int(msg.created_at.timestamp()),
         })
 
@@ -392,6 +434,52 @@ def whatsapp_inbox_view(request):
     return Response(payload, status=HTTP_200_OK)
 
 
+@require_http_methods(["GET"])
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def whatsapp_media_access_view(request, asset_id: int):
+    """Retorna URL de acesso da mídia salva no storage para uso do frontend."""
+    logger.info('[MEDIA ACCESS] Requisição recebida user_id=%s asset_id=%s', getattr(request.user, 'id', None), asset_id)
+    asset = get_object_or_404(WhatsAppMediaAsset, id=asset_id)
+
+    if asset.status != 'ready' or not asset.file:
+        logger.warning(
+            '[MEDIA ACCESS] Asset indisponível asset_id=%s status=%s has_file=%s error=%s',
+            asset.id,
+            asset.status,
+            bool(asset.file),
+            asset.error_message,
+        )
+        return Response(
+            {
+                'asset_id': asset.id,
+                'status': asset.status,
+                'error': asset.error_message,
+            },
+            status=HTTP_404_NOT_FOUND,
+        )
+
+    logger.info(
+        '[MEDIA ACCESS] URL gerada asset_id=%s media_type=%s mime_type=%s',
+        asset.id,
+        asset.media_type,
+        asset.mime_type,
+    )
+
+    return Response(
+        {
+            'asset_id': asset.id,
+            'status': asset.status,
+            'media_type': asset.media_type,
+            'mime_type': asset.mime_type,
+            'url': asset.file.url,
+            'file_size_bytes': asset.file_size_bytes,
+            'whatsapp_message_id': asset.whatsapp_message_id,
+        },
+        status=HTTP_200_OK,
+    )
+
+
 @require_http_methods(["POST"])
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -399,14 +487,32 @@ def whatsapp_send_text_view(request):
     """Envia mensagem de texto para um numero WhatsApp e salva no historico."""
     wa_id = str(request.data.get('wa_id', '')).strip()
     text = str(request.data.get('text', '')).strip()
+    sender_id = request.data.get('sender_id')
 
     if not wa_id:
         return Response({'error': 'wa_id é obrigatório'}, status=HTTP_400_BAD_REQUEST)
     if not text:
         return Response({'error': 'text é obrigatório'}, status=HTTP_400_BAD_REQUEST)
+    if not sender_id:
+        return Response({'error': 'sender_id é obrigatório'}, status=HTTP_400_BAD_REQUEST)
 
+    # Buscar o remetente WhatsApp do usuário
+    try:
+        sender = WhatsAppSender.objects.get(id=sender_id, user=request.user)
+    except WhatsAppSender.DoesNotExist:
+        return Response(
+            {'error': 'Remetente WhatsApp não encontrado'},
+            status=HTTP_404_NOT_FOUND
+        )
+
+    # Chamar serviço passando as credenciais do remetente
     service = WhatsAppAPIService()
-    result = service.send_text_message(to_number=wa_id, message=text)
+    result = service.send_text_message(
+        to_number=wa_id,
+        message=text,
+        access_token=sender.get_access_token(),
+        phone_number_id=sender.phone_number_id
+    )
 
     if not result.get('success'):
         return Response(result, status=HTTP_400_BAD_REQUEST)
@@ -415,8 +521,8 @@ def whatsapp_send_text_view(request):
         to_wa_id=wa_id,
         text_body=text,
         whatsapp_message_id=result.get('message_id', ''),
-        phone_number_id=service.phone_number_id,
-        status=result.get('status', 'sent'),
+        phone_number_id=sender.phone_number_id,
+        status='enviado' if result.get('status') == 'sent' else result.get('status', 'enviado'),
         sent_by=request.user,
         payload=result,
     )

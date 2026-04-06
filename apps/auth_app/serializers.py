@@ -6,7 +6,6 @@ from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from .models import (
-    AccountSettings,
     GmailSender,
     GmailTemplate,
     WhatsAppSender,
@@ -147,31 +146,6 @@ class ChangePasswordSerializer(serializers.Serializer):
         return data
 
 
-class AccountSettingsSerializer(serializers.ModelSerializer):
-    """Serializer para configurações da conta do usuário."""
-
-    class Meta:
-        model = AccountSettings
-        fields = (
-            'gmail_sender_email',
-            'gmail_app_password',
-            'whatsapp_phone_number',
-            'whatsapp_access_token',
-            'whatsapp_phone_number_id',
-            'whatsapp_business_id',
-            'whatsapp_templates',
-        )
-
-    def validate_whatsapp_templates(self, value):
-        if value is None:
-            return []
-        if not isinstance(value, list):
-            raise serializers.ValidationError('whatsapp_templates deve ser um array de strings.')
-        if any(not isinstance(item, str) for item in value):
-            raise serializers.ValidationError('whatsapp_templates deve conter apenas strings.')
-        return value
-
-
 class GmailTemplateSerializer(serializers.ModelSerializer):
     """Serializer para templates de Gmail."""
 
@@ -218,17 +192,40 @@ class GmailSenderSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        # Mantemos compatibilidade com o formato legado, que já expõe appPassword no GET.
-        data['appPassword'] = instance.get_app_password() if instance.app_password_encrypted else ''
+        # Retorna senha mascarada por segurança - cliente não deve receber senha descriptografada
+        data['appPassword'] = self.get_appPasswordMasked(instance)
         return data
 
 
 class WhatsAppTemplateSerializer(serializers.ModelSerializer):
     """Serializer para templates de WhatsApp."""
 
+    name = serializers.CharField(write_only=True, required=False, allow_blank=False)
+
     class Meta:
         model = WhatsAppTemplate
-        fields = ('id', 'title', 'content')
+        fields = ('id', 'title', 'name')
+        extra_kwargs = {
+            'title': {'required': False, 'allow_blank': False},
+        }
+
+    def validate(self, attrs):
+        title = attrs.get('title')
+        name = attrs.pop('name', None)
+
+        if not title and name:
+            title = name
+
+        if not title:
+            raise serializers.ValidationError({'title': 'title (ou name) é obrigatório.'})
+
+        attrs['title'] = str(title).strip()
+        return attrs
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['name'] = data.get('title', '')
+        return data
 
 
 class WhatsAppSenderSerializer(serializers.ModelSerializer):
@@ -238,7 +235,7 @@ class WhatsAppSenderSerializer(serializers.ModelSerializer):
     accessToken = serializers.CharField(write_only=True, required=False, allow_blank=True)
     accessTokenMasked = serializers.SerializerMethodField(read_only=True)
     phoneNumberId = serializers.CharField(source='phone_number_id')
-    businessId = serializers.CharField(source='business_id')
+    wabaId = serializers.CharField(source='waba_id')
     templates = WhatsAppTemplateSerializer(many=True, read_only=True)
 
     class Meta:
@@ -249,9 +246,15 @@ class WhatsAppSenderSerializer(serializers.ModelSerializer):
             'accessToken',
             'accessTokenMasked',
             'phoneNumberId',
-            'businessId',
+            'wabaId',
             'templates',
         )
+
+    def to_internal_value(self, data):
+        if isinstance(data, dict) and 'wabaId' not in data and 'businessId' in data:
+            data = dict(data)
+            data['wabaId'] = data.get('businessId')
+        return super().to_internal_value(data)
 
     def get_accessTokenMasked(self, obj):
         if not obj.access_token_encrypted:
@@ -277,28 +280,15 @@ class WhatsAppSenderSerializer(serializers.ModelSerializer):
         instance.save()
         return instance
 
-
-class AccountSettingsGmailCompatSerializer(serializers.Serializer):
-    """Bloco compatível de Gmail para resposta final de settings."""
-
-    senderEmail = serializers.CharField(allow_blank=True)
-    appPassword = serializers.CharField(allow_blank=True)
-
-
-class AccountSettingsWhatsAppCompatSerializer(serializers.Serializer):
-    """Bloco compatível de WhatsApp para resposta final de settings."""
-
-    phoneNumber = serializers.CharField(allow_blank=True)
-    accessToken = serializers.CharField(allow_blank=True)
-    phoneNumberId = serializers.CharField(allow_blank=True)
-    businessId = serializers.CharField(allow_blank=True)
-    templates = serializers.ListField(child=serializers.CharField(), default=list)
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Retorna token mascarado por segurança - cliente não deve receber token descriptografado
+        data['accessToken'] = self.get_accessTokenMasked(instance)
+        return data
 
 
-class AccountSettingsResponseSerializer(serializers.Serializer):
+class AccountSendersResponseSerializer(serializers.Serializer):
     """Contrato final de settings consumido pelo frontend."""
 
-    gmail = AccountSettingsGmailCompatSerializer()
-    whatsapp = AccountSettingsWhatsAppCompatSerializer()
     gmailSenders = GmailSenderSerializer(many=True)
     whatsappSenders = WhatsAppSenderSerializer(many=True)

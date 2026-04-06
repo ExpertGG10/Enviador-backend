@@ -3,6 +3,7 @@ WhatsAppService - Serviço para envio de mensagens via WhatsApp API.
 Adaptado para aceitar número de telefone no momento do envio.
 """
 import logging
+import requests
 from typing import Dict, List
 
 logger = logging.getLogger(__name__)
@@ -15,6 +16,50 @@ class WhatsAppService:
     Este serviço aceita o número de telefone no payload ao invés
     de usar um número salvo.
     """
+
+    GRAPH_API_BASE_URL = 'https://graph.facebook.com/v22.0'
+
+    @staticmethod
+    def _send_template_message(access_token: str, phone_number_id: str, recipient: str, template: dict) -> dict:
+        """Envia um template para um destinatário via WhatsApp Cloud API."""
+        url = f"{WhatsAppService.GRAPH_API_BASE_URL}/{phone_number_id}/messages"
+        headers = {
+            'Authorization': f'Bearer {access_token}',
+            'Content-Type': 'application/json',
+        }
+        body = {
+            'messaging_product': 'whatsapp',
+            'recipient_type': 'individual',
+            'to': recipient,
+            'type': 'template',
+            'template': template,
+        }
+
+        resp = requests.post(url, json=body, headers=headers, timeout=20)
+        try:
+            payload = resp.json()
+        except ValueError:
+            payload = {'raw': resp.text}
+
+        if not resp.ok:
+            error_message = payload.get('error', {}).get('message') if isinstance(payload, dict) else None
+            return {
+                'success': False,
+                'status_code': resp.status_code,
+                'error': error_message or 'Erro ao enviar template',
+                'response': payload,
+            }
+
+        message_id = (
+            payload.get('messages', [{}])[0].get('id')
+            if isinstance(payload, dict) else None
+        )
+        return {
+            'success': True,
+            'status_code': resp.status_code,
+            'message_id': message_id,
+            'response': payload,
+        }
     
     @staticmethod
     def send(payload: dict) -> dict:
@@ -43,6 +88,115 @@ class WhatsAppService:
         """
         try:
             logger.info("[WHATSAPP SEND] Iniciando envio de mensagens via WhatsApp")
+
+            resolved_template_messages = payload.get('resolved_template_messages') or []
+            if resolved_template_messages:
+                access_token = str(payload.get('whatsapp_access_token') or '').strip()
+                phone_number_id = str(payload.get('whatsapp_phone_number_id') or '').strip()
+                if not access_token:
+                    return {
+                        'status': 'error',
+                        'error': 'whatsapp_access_token is required for template sends',
+                        'previews': [],
+                        'summary': {'total': 0, 'success': 0, 'failed': 0}
+                    }
+                if not phone_number_id:
+                    return {
+                        'status': 'error',
+                        'error': 'whatsapp_phone_number_id is required for template sends',
+                        'previews': [],
+                        'summary': {'total': 0, 'success': 0, 'failed': 0}
+                    }
+
+                total = len(resolved_template_messages)
+                success_count = 0
+                failed_count = 0
+                previews = []
+                failed_errors = []
+
+                for i, item in enumerate(resolved_template_messages):
+                    recipient = str(item.get('recipient', '')).strip()
+                    template = item.get('template') or {}
+
+                    if not recipient:
+                        failed_count += 1
+                        if len(previews) < 5:
+                            previews.append({
+                                'index': i,
+                                'recipient': '',
+                                'template_name': template.get('name', ''),
+                                'params_count': len(item.get('params') or []),
+                                'status': 'erro',
+                                'error': 'recipient vazio',
+                            })
+                        continue
+
+                    send_result = WhatsAppService._send_template_message(
+                        access_token=access_token,
+                        phone_number_id=phone_number_id,
+                        recipient=recipient,
+                        template=template,
+                    )
+
+                    if send_result.get('success'):
+                        success_count += 1
+                        preview_status = 'enviado'
+                        preview_error = None
+                    else:
+                        failed_count += 1
+                        preview_status = 'erro'
+                        preview_error = send_result.get('error')
+                        if preview_error:
+                            failed_errors.append(str(preview_error))
+                        logger.warning(
+                            "[WHATSAPP SEND] Falha ao enviar template: recipient=%s template=%s status_code=%s error=%s",
+                            recipient,
+                            template.get('name', ''),
+                            send_result.get('status_code'),
+                            preview_error or 'Erro ao enviar template',
+                        )
+
+                    if len(previews) < 5:
+                        preview_payload = {
+                            'index': i,
+                            'recipient': recipient,
+                            'template_name': template.get('name', ''),
+                            'params_count': len(item.get('params') or []),
+                            'status': preview_status,
+                        }
+                        if preview_error:
+                            preview_payload['error'] = preview_error
+                        previews.append(preview_payload)
+
+                logger.info(
+                    "[WHATSAPP SEND] Envio via templates resolvidos concluído: total=%s success=%s failed=%s",
+                    total,
+                    success_count,
+                    failed_count,
+                )
+
+                if success_count == 0 and failed_count > 0:
+                    common_error = failed_errors[0] if failed_errors else 'Nenhuma mensagem foi enviada com sucesso'
+                    return {
+                        'status': 'error',
+                        'error': common_error,
+                        'previews': previews,
+                        'summary': {
+                            'total': total,
+                            'success': success_count,
+                            'failed': failed_count
+                        }
+                    }
+
+                return {
+                    'status': 'success' if failed_count == 0 else 'partial_success',
+                    'previews': previews,
+                    'summary': {
+                        'total': total,
+                        'success': success_count,
+                        'failed': failed_count
+                    }
+                }
 
             resolved_messages = payload.get('resolved_messages') or []
             if resolved_messages:

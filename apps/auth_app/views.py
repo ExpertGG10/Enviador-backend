@@ -1,24 +1,29 @@
 """Views de Autenticação."""
 
+import requests
+from urllib.parse import quote_plus
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.status import (
     HTTP_200_OK, HTTP_201_CREATED, HTTP_400_BAD_REQUEST,
-    HTTP_401_UNAUTHORIZED
+    HTTP_401_UNAUTHORIZED, HTTP_404_NOT_FOUND
 )
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.authentication import TokenAuthentication
+import logging
 from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
+
+logger = logging.getLogger(__name__)
 
 from .serializers import (
     UserSerializer,
     UserRegisterSerializer,
     LoginSerializer,
     ChangePasswordSerializer,
-    AccountSettingsSerializer,
-    AccountSettingsResponseSerializer,
+    AccountSendersResponseSerializer,
     GmailSenderSerializer,
     GmailTemplateSerializer,
     WhatsAppSenderSerializer,
@@ -26,12 +31,12 @@ from .serializers import (
 )
 from .services import AuthService
 from .models import (
-    AccountSettings,
     GmailSender,
     GmailTemplate,
     WhatsAppSender,
     WhatsAppTemplate,
 )
+from django.db import transaction
 
 
 class HealthView(APIView):
@@ -194,68 +199,176 @@ class ListUsersView(APIView):
 
 class AccountSettingsView(APIView):
     """Endpoint para obter/atualizar configurações da conta do usuário autenticado."""
+    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
-    def get(self, request):
-        """GET /api/account/settings/"""
-        settings_obj, _ = AccountSettings.objects.get_or_create(user=request.user)
-
+    def _build_response_payload(self, request):
         gmail_senders = GmailSender.objects.filter(user=request.user).prefetch_related('templates').order_by('-created_at')
         whatsapp_senders = WhatsAppSender.objects.filter(user=request.user).prefetch_related('templates').order_by('-created_at')
 
-        first_gmail = gmail_senders.first()
-        first_whatsapp = whatsapp_senders.first()
-
-        whatsapp_titles = []
-        if first_whatsapp:
-            whatsapp_titles = list(first_whatsapp.templates.order_by('title').values_list('title', flat=True))
-        elif settings_obj.whatsapp_templates:
-            whatsapp_titles = settings_obj.whatsapp_templates
-
-        response_payload = {
-            'gmail': {
-                'senderEmail': first_gmail.sender_email if first_gmail else settings_obj.gmail_sender_email,
-                'appPassword': settings_obj.gmail_app_password,
-            },
-            'whatsapp': {
-                'phoneNumber': first_whatsapp.phone_number if first_whatsapp else settings_obj.whatsapp_phone_number,
-                'accessToken': settings_obj.whatsapp_access_token,
-                'phoneNumberId': first_whatsapp.phone_number_id if first_whatsapp else settings_obj.whatsapp_phone_number_id,
-                'businessId': first_whatsapp.business_id if first_whatsapp else settings_obj.whatsapp_business_id,
-                'templates': whatsapp_titles,
-            },
+        return {
             'gmailSenders': gmail_senders,
             'whatsappSenders': whatsapp_senders,
         }
 
-        response_serializer = AccountSettingsResponseSerializer(instance=response_payload)
+    def _sync_templates(self, sender, templates_data, template_model_cls, template_serializer_cls):
+        """Sincroniza templates aninhados de um sender."""
+        if templates_data == []:
+            template_model_cls.objects.filter(sender=sender).delete()
+            return
+
+        if not isinstance(templates_data, list):
+            raise ValueError('Formato inválido: templates deve ser um array.')
+
+        existing_templates = template_model_cls.objects.filter(sender=sender)
+        existing_by_id = {str(obj.id): obj for obj in existing_templates}
+        existing_by_title = {obj.title.strip().lower(): obj for obj in existing_templates if obj.title}
+        keep_template_ids = []
+
+        for template_item in templates_data:
+            template_item = self._normalize_template_item(template_item, template_model_cls)
+
+            template_id = str(template_item.get('id', '')).strip()
+            template_title = str(template_item.get('title', '')).strip()
+            normalized_title = template_title.lower() if template_title else ''
+
+            existing_template = None
+
+            if template_id and template_id in existing_by_id:
+                existing_template = existing_by_id[template_id]
+            elif normalized_title and normalized_title in existing_by_title:
+                existing_template = existing_by_title[normalized_title]
+            
+            # Template existente por ID ou title/name → atualizar
+            if existing_template is not None:
+                template_serializer = template_serializer_cls(
+                    existing_template,
+                    data=template_item,
+                    partial=True
+                )
+                template_serializer.is_valid(raise_exception=True)
+                updated_template = template_serializer.save()
+                keep_template_ids.append(str(updated_template.id))
+                existing_by_title[updated_template.title.strip().lower()] = updated_template
+            # Novo template (sem ID e sem correspondência por title/name) → criar
+            else:
+                template_serializer = template_serializer_cls(data=template_item)
+                template_serializer.is_valid(raise_exception=True)
+                created_template = template_serializer.save(sender=sender)
+                keep_template_ids.append(str(created_template.id))
+                existing_by_title[created_template.title.strip().lower()] = created_template
+
+        # Deletar templates não mencionados
+        if keep_template_ids:
+            template_model_cls.objects.filter(sender=sender).exclude(id__in=keep_template_ids).delete()
+        else:
+            template_model_cls.objects.filter(sender=sender).delete()
+
+    def _normalize_template_item(self, template_item, template_model_cls):
+        if isinstance(template_item, str):
+            normalized_item = {'title': template_item}
+        elif isinstance(template_item, dict):
+            normalized_item = dict(template_item)
+        else:
+            raise ValueError('Formato inválido: cada template deve ser um objeto ou string.')
+
+        if template_model_cls is WhatsAppTemplate:
+            template_name = normalized_item.get('name') or normalized_item.get('title')
+            normalized_item = {'id': normalized_item.get('id'), 'name': template_name}
+
+        if not normalized_item.get('title') and normalized_item.get('name'):
+            normalized_item['title'] = normalized_item.get('name')
+
+        return normalized_item
+
+    def _sync_sender_list(self, request, items, model_cls, serializer_cls, template_model_cls=None, template_serializer_cls=None):
+        if items is None:
+            return
+
+        if not isinstance(items, list):
+            raise ValueError('Formato inválido: esperado array de remetentes.')
+
+        existing = model_cls.objects.filter(user=request.user)
+        existing_by_id = {str(obj.id): obj for obj in existing}
+        keep_ids = []
+
+        for item in items:
+            if not isinstance(item, dict):
+                raise ValueError('Formato inválido: cada remetente deve ser um objeto.')
+
+            # Extrair templates do payload antes de passar ao serializer (pois é read-only)
+            templates_data = item.pop('templates', None)
+            
+            sender_id = str(item.get('id', '')).strip()
+            if sender_id and sender_id in existing_by_id:
+                serializer = serializer_cls(existing_by_id[sender_id], data=item, partial=True)
+                serializer.is_valid(raise_exception=True)
+                updated = serializer.save()
+                keep_ids.append(str(updated.id))
+                sender = updated
+            else:
+                serializer = serializer_cls(data=item)
+                serializer.is_valid(raise_exception=True)
+                created = serializer.save(user=request.user)
+                keep_ids.append(str(created.id))
+                sender = created
+
+            # Sincronizar templates aninhados se fornecido
+            if template_model_cls and template_serializer_cls and templates_data is not None:
+                self._sync_templates(sender, templates_data, template_model_cls, template_serializer_cls)
+
+        if keep_ids:
+            model_cls.objects.filter(user=request.user).exclude(id__in=keep_ids).delete()
+        else:
+            model_cls.objects.filter(user=request.user).delete()
+
+    def get(self, request):
+        """GET /api/account/settings/"""
+        response_payload = self._build_response_payload(request)
+
+        response_serializer = AccountSendersResponseSerializer(instance=response_payload)
         return Response(response_serializer.data, status=HTTP_200_OK)
 
     def put(self, request):
         """PUT /api/account/settings/"""
-        settings_obj, _ = AccountSettings.objects.get_or_create(user=request.user)
-        serializer = AccountSettingsSerializer(settings_obj, data=request.data, partial=True)
+        gmail_senders = request.data.get('gmailSenders')
+        whatsapp_senders = request.data.get('whatsappSenders')
 
-        if serializer.is_valid():
-            serializer.save(user=request.user)
-            return Response(serializer.data, status=HTTP_200_OK)
+        try:
+            with transaction.atomic():
+                self._sync_sender_list(
+                    request,
+                    gmail_senders,
+                    GmailSender,
+                    GmailSenderSerializer,
+                    template_model_cls=GmailTemplate,
+                    template_serializer_cls=GmailTemplateSerializer
+                )
+                self._sync_sender_list(
+                    request,
+                    whatsapp_senders,
+                    WhatsAppSender,
+                    WhatsAppSenderSerializer,
+                    template_model_cls=WhatsAppTemplate,
+                    template_serializer_cls=WhatsAppTemplateSerializer
+                )
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=HTTP_400_BAD_REQUEST)
+        except Exception as exc:
+            return Response({'error': str(exc)}, status=HTTP_400_BAD_REQUEST)
 
-        return Response(serializer.errors, status=HTTP_400_BAD_REQUEST)
+        response_payload = self._build_response_payload(request)
+        response_serializer = AccountSendersResponseSerializer(instance=response_payload)
+        return Response(response_serializer.data, status=HTTP_200_OK)
 
     def patch(self, request):
         """PATCH /api/account/settings/"""
-        settings_obj, _ = AccountSettings.objects.get_or_create(user=request.user)
-        serializer = AccountSettingsSerializer(settings_obj, data=request.data, partial=True)
-
-        if serializer.is_valid():
-            serializer.save(user=request.user)
-            return Response(serializer.data, status=HTTP_200_OK)
-
-        return Response(serializer.errors, status=HTTP_400_BAD_REQUEST)
+        return self.put(request)
 
 
 class GmailSenderListCreateView(APIView):
     """CRUD de remetentes Gmail no escopo de conta."""
+    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -269,6 +382,7 @@ class GmailSenderListCreateView(APIView):
 
 class GmailSenderDetailView(APIView):
     """Atualizar/deletar remetente Gmail."""
+    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def _get_sender(self, request, sender_id):
@@ -300,6 +414,7 @@ class GmailSenderDetailView(APIView):
 
 class GmailTemplateListCreateView(APIView):
     """CRUD de templates Gmail por remetente."""
+    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def _get_sender(self, request, sender_id):
@@ -323,6 +438,7 @@ class GmailTemplateListCreateView(APIView):
 
 class GmailTemplateDetailView(APIView):
     """Atualizar/deletar template Gmail por remetente."""
+    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def _get_template(self, request, sender_id, template_id):
@@ -359,6 +475,7 @@ class GmailTemplateDetailView(APIView):
 
 class WhatsAppSenderListCreateView(APIView):
     """CRUD de remetentes WhatsApp no escopo de conta."""
+    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -372,6 +489,7 @@ class WhatsAppSenderListCreateView(APIView):
 
 class WhatsAppSenderDetailView(APIView):
     """Atualizar/deletar remetente WhatsApp."""
+    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def _get_sender(self, request, sender_id):
@@ -403,6 +521,7 @@ class WhatsAppSenderDetailView(APIView):
 
 class WhatsAppTemplateListCreateView(APIView):
     """CRUD de templates WhatsApp por remetente."""
+    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def _get_sender(self, request, sender_id):
@@ -426,6 +545,7 @@ class WhatsAppTemplateListCreateView(APIView):
 
 class WhatsAppTemplateDetailView(APIView):
     """Atualizar/deletar template WhatsApp por remetente."""
+    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def _get_template(self, request, sender_id, template_id):
@@ -458,3 +578,81 @@ class WhatsAppTemplateDetailView(APIView):
             return Response({'error': 'Template WhatsApp não encontrado'}, status=404)
         template.delete()
         return Response({'message': 'Template WhatsApp removido com sucesso'}, status=HTTP_200_OK)
+
+
+class WhatsAppTemplatePreviewView(APIView):
+    """Busca os detalhes de um template WhatsApp na Graph API para preview e seleção de variáveis."""
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    GRAPH_API_VERSION = 'v22.0'
+    GRAPH_API_BASE = 'https://graph.facebook.com'
+
+    def _get_sender(self, request, sender_id):
+        try:
+            return WhatsAppSender.objects.get(id=sender_id, user=request.user)
+        except WhatsAppSender.DoesNotExist:
+            return None
+
+    def get(self, request, sender_id, template_name):
+        """
+        GET /api/account/whatsapp/senders/<uuid:sender_id>/templates/<str:template_name>/preview/
+
+        Consulta a Graph API do WhatsApp e retorna os dados do template:
+        name, language, status, category e components (HEADER, BODY, FOOTER, BUTTONS).
+        """
+        sender = self._get_sender(request, sender_id)
+        if not sender:
+            return Response({'error': 'Remetente WhatsApp não encontrado'}, status=HTTP_404_NOT_FOUND)
+
+        access_token = sender.get_access_token()
+        waba_id = sender.waba_id
+
+        if not access_token:
+            return Response({'error': 'Token de acesso não configurado para este remetente'}, status=HTTP_400_BAD_REQUEST)
+        if not waba_id:
+            return Response({'error': 'WABA ID não configurado para este remetente'}, status=HTTP_400_BAD_REQUEST)
+
+        encoded_template_name = quote_plus(str(template_name))
+        url = f'{self.GRAPH_API_BASE}/{self.GRAPH_API_VERSION}/{waba_id}/message_templates?name={encoded_template_name}'
+        headers = {'Authorization': f'Bearer {access_token}'}
+
+        try:
+            resp = requests.get(url, headers=headers, timeout=10)
+        except requests.RequestException as exc:
+            logger.error(f'[TEMPLATE PREVIEW] Erro de conexão com a Graph API: {exc}')
+            return Response({'error': 'Não foi possível conectar à API do WhatsApp'}, status=HTTP_400_BAD_REQUEST)
+
+        if not resp.ok:
+            try:
+                error_body = resp.json()
+            except ValueError:
+                error_body = {'raw': resp.text}
+            logger.warning(f'[TEMPLATE PREVIEW] Erro da Graph API ({resp.status_code}): {error_body}')
+            return Response(
+                {'error': 'Erro ao consultar a API do WhatsApp', 'detail': error_body},
+                status=resp.status_code,
+            )
+
+        data = resp.json().get('data', [])
+        if not data:
+            return Response({'error': f'Template "{template_name}" não encontrado'}, status=HTTP_404_NOT_FOUND)
+
+        return Response(self._extract_texts(data[0]), status=HTTP_200_OK)
+
+    def _extract_texts(self, template: dict) -> dict:
+        """Extrai apenas os textos relevantes de cada componente do template."""
+        result = {'name': template.get('name'), 'language': template.get('language')}
+
+        for component in template.get('components', []):
+            component_type = (component.get('type') or '').upper()
+            if component_type == 'HEADER':
+                result['header'] = component.get('text') or ''
+            elif component_type == 'BODY':
+                result['body'] = component.get('text') or ''
+            elif component_type == 'FOOTER':
+                result['footer'] = component.get('text') or ''
+            elif component_type == 'BUTTONS':
+                result['buttons'] = [btn.get('text') for btn in component.get('buttons', []) if btn.get('text')]
+
+        return result

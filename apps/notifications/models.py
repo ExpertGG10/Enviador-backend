@@ -137,3 +137,35 @@ class WhatsAppOutboundMessage(models.Model):
 
     def __str__(self):
         return f"to {self.to_wa_id} ({self.whatsapp_message_id or 'pending-id'})"
+
+
+class WhatsAppMediaAsset(models.Model):
+    """Asset de mídia associado a uma mensagem WhatsApp (inbound/outbound)."""
+
+    webhook_message = models.OneToOneField(
+        WhatsAppWebhookMessage,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name='media_asset',
+    )
+    whatsapp_message_id = models.CharField(max_length=255, db_index=True)
+    media_id = models.CharField(max_length=255, blank=True, db_index=True)
+    media_type = models.CharField(max_length=40, default='image')
+    mime_type = models.CharField(max_length=120, blank=True)
+    sha256 = models.CharField(max_length=128, blank=True)
+    file_size_bytes = models.BigIntegerField(null=True, blank=True)
+    file = models.FileField(upload_to='whatsapp/media/%Y/%m/%d/', blank=True)
+    status = models.CharField(max_length=30, default='pending', db_index=True)
+    error_message = models.TextField(blank=True)
+    payload = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'WhatsApp Media Asset'
+        verbose_name_plural = 'WhatsApp Media Assets'
+
+    def __str__(self):
+        return f"{self.media_type} ({self.whatsapp_message_id})"
