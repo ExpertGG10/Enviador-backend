@@ -169,3 +169,42 @@ class WhatsAppMediaAsset(models.Model):
 
     def __str__(self):
         return f"{self.media_type} ({self.whatsapp_message_id})"
+
+
+class WhatsAppPendingAttachment(models.Model):
+    """Anexo pendente aguardando clique de botao para envio ao contato."""
+
+    sender = models.ForeignKey(
+        'auth_app.WhatsAppSender',
+        on_delete=models.CASCADE,
+        related_name='pending_attachments',
+    )
+    wa_id = models.CharField(max_length=40, db_index=True)
+    button_payload = models.CharField(max_length=255, db_index=True)
+    media_type = models.CharField(max_length=40, default='document')
+    mime_type = models.CharField(max_length=120, blank=True)
+    caption = models.TextField(blank=True)
+    original_name = models.CharField(max_length=255, blank=True)
+    file_size_bytes = models.BigIntegerField(null=True, blank=True)
+    sha256 = models.CharField(max_length=128, blank=True, db_index=True)
+    file = models.FileField(upload_to='whatsapp/pending/%Y/%m/%d/')
+    status = models.CharField(max_length=30, default='pending', db_index=True)
+    attempts = models.PositiveIntegerField(default=0)
+    trigger_message_id = models.CharField(max_length=255, blank=True, db_index=True)
+    error_message = models.TextField(blank=True)
+    payload = models.JSONField(default=dict)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['sender', 'wa_id', 'button_payload', 'status']),
+            models.Index(fields=['sender', 'status', '-created_at']),
+        ]
+        verbose_name = 'WhatsApp Pending Attachment'
+        verbose_name_plural = 'WhatsApp Pending Attachments'
+
+    def __str__(self):
+        return f"{self.wa_id} ({self.button_payload}) [{self.status}]"

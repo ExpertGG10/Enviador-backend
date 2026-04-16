@@ -4,6 +4,7 @@ import tempfile
 from unittest.mock import Mock, patch
 
 from django.core.files.base import ContentFile
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.contrib.auth import get_user_model
 from django.urls import reverse
@@ -11,7 +12,12 @@ from django.test.utils import override_settings
 from rest_framework.test import APIClient
 
 from .services import WebhookHandlerService
-from .models import WhatsAppWebhookMessage, WhatsAppOutboundMessage, WhatsAppMediaAsset
+from .models import (
+    WhatsAppWebhookMessage,
+    WhatsAppOutboundMessage,
+    WhatsAppMediaAsset,
+    WhatsAppPendingAttachment,
+)
 from apps.auth_app.models import WhatsAppSender
 
 
@@ -361,3 +367,122 @@ class WebhookTests(TestCase):
         self.assertEqual(data['asset_id'], asset.id)
         self.assertEqual(data['status'], 'ready')
         self.assertIn('url', data)
+
+    @patch('apps.notifications.services.requests.post')
+    def test_button_webhook_sends_pending_document(self, requests_post_mock):
+        upload_response = Mock()
+        upload_response.ok = True
+        upload_response.content = b'{"id":"meta-media-id-123"}'
+        upload_response.json.return_value = {'id': 'meta-media-id-123'}
+        upload_response.raise_for_status.return_value = None
+
+        send_response = Mock()
+        send_response.ok = True
+        send_response.content = b'{"messages":[{"id":"wamid.outbound.doc.123"}]}'
+        send_response.json.return_value = {'messages': [{'id': 'wamid.outbound.doc.123'}]}
+        send_response.raise_for_status.return_value = None
+
+        requests_post_mock.side_effect = [upload_response, send_response]
+
+        pending_file = SimpleUploadedFile(
+            'mensalidade.pdf',
+            b'fake-pdf-content',
+            content_type='application/pdf',
+        )
+        pending = WhatsAppPendingAttachment.objects.create(
+            sender=self.sender,
+            wa_id='16505551234',
+            button_payload='PAGAR_MENSALIDADE',
+            media_type='document',
+            mime_type='application/pdf',
+            caption='Segue seu boleto',
+            original_name='mensalidade.pdf',
+            file_size_bytes=len(b'fake-pdf-content'),
+            sha256='abc123',
+            file=pending_file,
+            status='pending',
+        )
+
+        webhook_payload = {
+            'object': 'whatsapp_business_account',
+            'entry': [{
+                'id': '102290129340398',
+                'changes': [{
+                    'value': {
+                        'messaging_product': 'whatsapp',
+                        'metadata': {
+                            'display_phone_number': '15550783881',
+                            'phone_number_id': self.sender.phone_number_id,
+                        },
+                        'contacts': [{
+                            'profile': {'name': 'Sheena Nelson'},
+                            'wa_id': '16505551234',
+                        }],
+                        'messages': [{
+                            'from': '16505551234',
+                            'id': 'wamid.inbound.button.1',
+                            'timestamp': '1744344500',
+                            'type': 'interactive',
+                            'interactive': {
+                                'type': 'button_reply',
+                                'button_reply': {
+                                    'id': 'PAGAR_MENSALIDADE',
+                                    'title': 'Pagar mensalidade',
+                                },
+                            },
+                        }],
+                    },
+                    'field': 'messages',
+                }],
+            }],
+        }
+
+        url = reverse('notifications:whatsapp-webhook')
+        response = self.client.post(url, data=webhook_payload, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        pending.refresh_from_db()
+        self.assertEqual(pending.status, 'sent')
+        self.assertEqual(pending.trigger_message_id, 'wamid.inbound.button.1')
+        self.assertIsNotNone(pending.sent_at)
+
+        outbound = WhatsAppOutboundMessage.objects.filter(
+            to_wa_id='16505551234',
+            whatsapp_message_id='wamid.outbound.doc.123',
+        ).first()
+        self.assertIsNotNone(outbound)
+        self.assertEqual(outbound.status, 'enviado')
+
+        self.assertEqual(requests_post_mock.call_count, 2)
+
+    def test_create_pending_attachment_endpoint(self):
+        url = reverse('notifications:whatsapp-pending-attachment-create')
+        upload_file = SimpleUploadedFile(
+            'honorario.pdf',
+            b'pdf-bytes',
+            content_type='application/pdf',
+        )
+
+        response = self.client.post(
+            url,
+            data={
+                'sender_id': str(self.sender.id),
+                'wa_id': '16505551234',
+                'button_payload': 'RECEBER_HONORARIO',
+                'media_type': 'document',
+                'caption': 'Arquivo de honorarios',
+                'file': upload_file,
+            },
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['status'], 'pending')
+
+        created_id = payload['pending_attachment']['id']
+        pending = WhatsAppPendingAttachment.objects.get(id=created_id)
+        self.assertEqual(pending.wa_id, '16505551234')
+        self.assertEqual(pending.button_payload, 'RECEBER_HONORARIO')
+        self.assertEqual(pending.media_type, 'document')
+        self.assertEqual(pending.status, 'pending')

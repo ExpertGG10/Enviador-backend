@@ -2,6 +2,7 @@
 
 import json
 import os
+import hashlib
 import unicodedata
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -16,8 +17,14 @@ from rest_framework.response import Response
 from rest_framework.status import HTTP_200_OK, HTTP_400_BAD_REQUEST, HTTP_404_NOT_FOUND
 from django.shortcuts import get_object_or_404
 
-from .models import WhatsAppWebhookMessage, WhatsAppWebhookContact, WhatsAppOutboundMessage, WhatsAppMediaAsset
-from .services import WhatsAppAPIService, WebhookHandlerService
+from .models import (
+    WhatsAppWebhookMessage,
+    WhatsAppWebhookContact,
+    WhatsAppOutboundMessage,
+    WhatsAppMediaAsset,
+    WhatsAppPendingAttachment,
+)
+from .services import WhatsAppAPIService, WebhookHandlerService, PendingAttachmentDispatchService
 from .media_registry import MediaTypeRegistry
 from apps.auth_app.models import WhatsAppSender
 
@@ -121,6 +128,11 @@ def whatsapp_webhook_callback_view(request):
         WebhookHandlerService.log_webhook_event(data)
     except Exception:
         logger.exception('Erro ao persistir evento do webhook WhatsApp')
+
+    try:
+        PendingAttachmentDispatchService.dispatch_from_webhook_payload(data)
+    except Exception:
+        logger.exception('Erro ao processar pendências de anexo via webhook')
 
     try:
         if (
@@ -263,6 +275,11 @@ def whatsapp_webhook_view(request):
     
     # Log do evento
     WebhookHandlerService.log_webhook_event(data)
+
+    try:
+        PendingAttachmentDispatchService.dispatch_from_webhook_payload(data)
+    except Exception:
+        logger.exception('Erro ao processar pendências de anexo via webhook')
     
     # Parse do evento
     events = WebhookHandlerService.parse_webhook_event(data)
@@ -540,3 +557,83 @@ def whatsapp_send_text_view(request):
         }
     }
     return Response(response_payload, status=HTTP_200_OK)
+
+
+@require_http_methods(["POST"])
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def whatsapp_pending_attachment_create_view(request):
+    """Cria anexo pendente aguardando clique de botão para envio ao contato."""
+    sender_id = request.data.get('sender_id')
+    wa_id = str(request.data.get('wa_id', '')).strip()
+    button_payload = str(request.data.get('button_payload', '')).strip()
+    media_type = str(request.data.get('media_type', 'document')).strip().lower()
+    caption = str(request.data.get('caption', '')).strip()
+
+    upload_file = request.FILES.get('file')
+
+    if not sender_id:
+        return Response({'error': 'sender_id é obrigatório'}, status=HTTP_400_BAD_REQUEST)
+    if not wa_id:
+        return Response({'error': 'wa_id é obrigatório'}, status=HTTP_400_BAD_REQUEST)
+    if not button_payload:
+        return Response({'error': 'button_payload é obrigatório'}, status=HTTP_400_BAD_REQUEST)
+    if upload_file is None:
+        return Response({'error': 'file é obrigatório'}, status=HTTP_400_BAD_REQUEST)
+
+    if media_type != 'document':
+        return Response({'error': 'No MVP, apenas media_type=document é suportado'}, status=HTTP_400_BAD_REQUEST)
+
+    try:
+        sender = WhatsAppSender.objects.get(id=sender_id, user=request.user)
+    except WhatsAppSender.DoesNotExist:
+        return Response({'error': 'Remetente WhatsApp não encontrado'}, status=HTTP_404_NOT_FOUND)
+
+    mime_type = str(
+        request.data.get('mime_type')
+        or getattr(upload_file, 'content_type', '')
+        or 'application/octet-stream'
+    ).strip()
+    file_size_bytes = int(getattr(upload_file, 'size', 0) or 0)
+
+    hasher = hashlib.sha256()
+    for chunk in upload_file.chunks():
+        hasher.update(chunk)
+    upload_file.seek(0)
+
+    pending = WhatsAppPendingAttachment.objects.create(
+        sender=sender,
+        wa_id=wa_id,
+        button_payload=button_payload,
+        media_type=media_type,
+        mime_type=mime_type,
+        caption=caption,
+        original_name=str(getattr(upload_file, 'name', '') or ''),
+        file_size_bytes=file_size_bytes,
+        sha256=hasher.hexdigest(),
+        file=upload_file,
+        status='pending',
+        payload={
+            'created_via': 'api.notifications.whatsapp_pending_attachment_create_view',
+            'created_by_user_id': request.user.id,
+        },
+    )
+
+    return Response(
+        {
+            'status': 'pending',
+            'pending_attachment': {
+                'id': pending.id,
+                'sender_id': str(sender.id),
+                'wa_id': pending.wa_id,
+                'button_payload': pending.button_payload,
+                'media_type': pending.media_type,
+                'mime_type': pending.mime_type,
+                'file_size_bytes': pending.file_size_bytes,
+                'original_name': pending.original_name,
+                'sha256': pending.sha256,
+                'created_at': pending.created_at.astimezone(timezone.utc).isoformat(),
+            },
+        },
+        status=HTTP_200_OK,
+    )

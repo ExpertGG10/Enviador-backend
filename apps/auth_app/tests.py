@@ -126,6 +126,63 @@ class AccountSettingsTemplateSyncTests(TestCase):
         self.assertEqual(len(templates), 1)
         self.assertEqual(templates[0].title, 'boleto_vencendo')
 
+    def test_settings_put_updates_gmail_app_password(self):
+        gmail_sender = GmailSender.objects.create(
+            user=self.user,
+            sender_email='financeiro@example.com',
+        )
+        gmail_sender.set_app_password('old-password')
+        gmail_sender.save()
+
+        payload = {
+            'gmailSenders': [
+                {
+                    'id': str(gmail_sender.id),
+                    'senderEmail': 'financeiro@example.com',
+                    'appPassword': 'new-app-password-123'
+                }
+            ]
+        }
+
+        response = self.client.put('/api/account/settings/', payload, format='json')
+        self.assertEqual(response.status_code, HTTP_200_OK)
+
+        gmail_sender.refresh_from_db()
+        self.assertEqual(gmail_sender.get_app_password(), 'new-app-password-123')
+
+    def test_settings_put_updates_gmail_app_password_with_snake_case(self):
+        gmail_sender = GmailSender.objects.create(
+            user=self.user,
+            sender_email='contato@example.com',
+        )
+        gmail_sender.set_app_password('old-password')
+        gmail_sender.save()
+
+        payload = {
+            'gmail_senders': [
+                {
+                    'id': str(gmail_sender.id),
+                    'sender_email': 'contato@example.com',
+                    'app_password': 'new-app-password-xyz'
+                }
+            ]
+        }
+
+        response = self.client.put('/api/account/settings/', payload, format='json')
+        self.assertEqual(response.status_code, HTTP_200_OK)
+
+        gmail_sender.refresh_from_db()
+        self.assertEqual(gmail_sender.get_app_password(), 'new-app-password-xyz')
+
+    def test_settings_put_requires_known_sender_keys(self):
+        response = self.client.put(
+            '/api/account/settings/',
+            {'invalidField': []},
+            format='json'
+        )
+        self.assertEqual(response.status_code, HTTP_400_BAD_REQUEST)
+        self.assertIn('error', response.data)
+
 
 class AccountSettingsIsolationTests(TestCase):
     def setUp(self):

@@ -322,6 +322,25 @@ class AccountSettingsView(APIView):
         else:
             model_cls.objects.filter(user=request.user).delete()
 
+    def _resolve_senders_payload(self, request):
+        """Resolve payload keys for senders and report whether any valid key was provided."""
+        data = request.data
+
+        gmail_senders = data.get('gmailSenders')
+        whatsapp_senders = data.get('whatsappSenders')
+
+        if gmail_senders is None:
+            gmail_senders = data.get('gmail_senders')
+        if whatsapp_senders is None:
+            whatsapp_senders = data.get('whatsapp_senders')
+
+        has_known_keys = any(
+            key in data
+            for key in ('gmailSenders', 'whatsappSenders', 'gmail_senders', 'whatsapp_senders')
+        )
+
+        return gmail_senders, whatsapp_senders, has_known_keys
+
     def get(self, request):
         """GET /api/account/settings/"""
         response_payload = self._build_response_payload(request)
@@ -331,8 +350,18 @@ class AccountSettingsView(APIView):
 
     def put(self, request):
         """PUT /api/account/settings/"""
-        gmail_senders = request.data.get('gmailSenders')
-        whatsapp_senders = request.data.get('whatsappSenders')
+        gmail_senders, whatsapp_senders, has_known_keys = self._resolve_senders_payload(request)
+
+        if not has_known_keys:
+            return Response(
+                {
+                    'error': (
+                        'Payload inválido: informe ao menos um dos campos '
+                        'gmailSenders ou whatsappSenders.'
+                    )
+                },
+                status=HTTP_400_BAD_REQUEST
+            )
 
         try:
             with transaction.atomic():

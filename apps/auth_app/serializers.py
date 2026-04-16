@@ -166,6 +166,16 @@ class GmailSenderSerializer(serializers.ModelSerializer):
         model = GmailSender
         fields = ('id', 'senderEmail', 'appPassword', 'appPasswordMasked', 'templates')
 
+    def to_internal_value(self, data):
+        if isinstance(data, dict):
+            mapped = dict(data)
+            if 'senderEmail' not in mapped and 'sender_email' in mapped:
+                mapped['senderEmail'] = mapped.get('sender_email')
+            if 'appPassword' not in mapped and 'app_password' in mapped:
+                mapped['appPassword'] = mapped.get('app_password')
+            data = mapped
+        return super().to_internal_value(data)
+
     def get_appPasswordMasked(self, obj):
         if not obj.app_password_encrypted:
             return ''
@@ -251,9 +261,23 @@ class WhatsAppSenderSerializer(serializers.ModelSerializer):
         )
 
     def to_internal_value(self, data):
-        if isinstance(data, dict) and 'wabaId' not in data and 'businessId' in data:
-            data = dict(data)
-            data['wabaId'] = data.get('businessId')
+        if isinstance(data, dict):
+            mapped = dict(data)
+
+            if 'phoneNumber' not in mapped and 'phone_number' in mapped:
+                mapped['phoneNumber'] = mapped.get('phone_number')
+            if 'accessToken' not in mapped and 'access_token' in mapped:
+                mapped['accessToken'] = mapped.get('access_token')
+            if 'phoneNumberId' not in mapped and 'phone_number_id' in mapped:
+                mapped['phoneNumberId'] = mapped.get('phone_number_id')
+
+            if 'wabaId' not in mapped:
+                if 'businessId' in mapped:
+                    mapped['wabaId'] = mapped.get('businessId')
+                elif 'waba_id' in mapped:
+                    mapped['wabaId'] = mapped.get('waba_id')
+
+            data = mapped
         return super().to_internal_value(data)
 
     def get_accessTokenMasked(self, obj):

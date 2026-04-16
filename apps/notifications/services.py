@@ -6,6 +6,9 @@ import logging
 import json
 import re
 
+from django.db import transaction
+from django.utils import timezone
+
 from django.core.files.base import ContentFile
 
 from apps.auth_app.models import WhatsAppSender
@@ -19,6 +22,7 @@ from .models import (
     WhatsAppWebhookMessage,
     WhatsAppOutboundMessage,
     WhatsAppMediaAsset,
+    WhatsAppPendingAttachment,
 )
 
 logger = logging.getLogger(__name__)
@@ -181,6 +185,330 @@ class WhatsAppAPIService:
                 'error': str(e),
                 'status': 'failed'
             }
+
+    def upload_media(self, file_obj, mime_type: str, access_token: str = None, phone_number_id: str = None, filename: str = None):
+        """Faz upload de mídia para a Cloud API e retorna media_id."""
+        try:
+            token = access_token or self.access_token
+            phone_id = phone_number_id or self.phone_number_id
+
+            if not token:
+                return {'success': False, 'error': 'Access token não configurado.', 'status': 'failed'}
+            if not phone_id:
+                return {'success': False, 'error': 'Phone number ID não configurado.', 'status': 'failed'}
+            if not file_obj:
+                return {'success': False, 'error': 'Arquivo não fornecido para upload.', 'status': 'failed'}
+
+            url = f"{self.BASE_URL}/{phone_id}/media"
+            safe_filename = str(filename or getattr(file_obj, 'name', 'attachment.bin') or 'attachment.bin')
+            safe_mime_type = str(mime_type or 'application/octet-stream')
+
+            if hasattr(file_obj, 'seek'):
+                file_obj.seek(0)
+
+            files = {
+                'file': (safe_filename, file_obj, safe_mime_type),
+            }
+            data = {'messaging_product': 'whatsapp'}
+            headers = {'Authorization': f'Bearer {token}'}
+
+            response = requests.post(url, data=data, files=files, headers=headers, timeout=60)
+            response.raise_for_status()
+
+            payload = response.json() if response.content else {}
+            media_id = payload.get('id') if isinstance(payload, dict) else None
+            if not media_id:
+                return {
+                    'success': False,
+                    'error': 'Meta API não retornou media_id no upload.',
+                    'status': 'failed',
+                    'payload': payload,
+                }
+
+            return {
+                'success': True,
+                'status': 'uploaded',
+                'media_id': str(media_id),
+                'payload': payload,
+            }
+
+        except Exception as e:
+            logger.error(f"Erro ao fazer upload de mídia WhatsApp: {str(e)}")
+            return {
+                'success': False,
+                'error': str(e),
+                'status': 'failed',
+            }
+
+    def send_document_message(
+        self,
+        to_number: str,
+        media_id: str,
+        caption: str = '',
+        filename: str = '',
+        access_token: str = None,
+        phone_number_id: str = None,
+    ):
+        """Envia documento já carregado na Meta para um contato WhatsApp."""
+        try:
+            token = access_token or self.access_token
+            phone_id = phone_number_id or self.phone_number_id
+
+            if not token:
+                return {'success': False, 'error': 'Access token não configurado.', 'status': 'failed'}
+            if not phone_id:
+                return {'success': False, 'error': 'Phone number ID não configurado.', 'status': 'failed'}
+            if not to_number:
+                return {'success': False, 'error': 'Destinatário não informado.', 'status': 'failed'}
+            if not media_id:
+                return {'success': False, 'error': 'media_id não informado.', 'status': 'failed'}
+
+            url = f"{self.BASE_URL}/{phone_id}/messages"
+            document_payload = {'id': str(media_id)}
+            if caption:
+                document_payload['caption'] = str(caption)
+            if filename:
+                document_payload['filename'] = str(filename)
+
+            payload = {
+                'messaging_product': 'whatsapp',
+                'recipient_type': 'individual',
+                'to': str(to_number),
+                'type': 'document',
+                'document': document_payload,
+            }
+            headers = {
+                'Authorization': f'Bearer {token}',
+                'Content-Type': 'application/json',
+            }
+
+            response = requests.post(url, json=payload, headers=headers, timeout=30)
+            response.raise_for_status()
+
+            response_payload = response.json() if response.content else {}
+            message_id = ''
+            if isinstance(response_payload, dict):
+                message_id = response_payload.get('messages', [{}])[0].get('id', '')
+
+            return {
+                'success': True,
+                'status': 'sent',
+                'message_id': message_id,
+                'payload': response_payload,
+            }
+
+        except Exception as e:
+            logger.error(f"Erro ao enviar documento WhatsApp: {str(e)}")
+            return {
+                'success': False,
+                'error': str(e),
+                'status': 'failed',
+            }
+
+
+class PendingAttachmentDispatchService:
+    """Processa eventos de botao e dispara anexos pendentes para o contato."""
+
+    @staticmethod
+    def dispatch_from_webhook_payload(data: dict):
+        triggers = PendingAttachmentDispatchService._extract_button_triggers(data)
+        for trigger in triggers:
+            try:
+                PendingAttachmentDispatchService._dispatch_trigger(
+                    phone_number_id=trigger['phone_number_id'],
+                    wa_id=trigger['wa_id'],
+                    button_payload=trigger['button_payload'],
+                    trigger_message_id=trigger['trigger_message_id'],
+                    raw_message=trigger['raw_message'],
+                )
+            except Exception:
+                logger.exception(
+                    '[PENDING ATTACHMENT] Erro ao processar trigger wa_id=%s payload=%s',
+                    trigger.get('wa_id'),
+                    trigger.get('button_payload'),
+                )
+
+    @staticmethod
+    def _extract_button_triggers(data: dict):
+        triggers = []
+        entries = data.get('entry') if isinstance(data, dict) else []
+        if not isinstance(entries, list):
+            return triggers
+
+        for entry in entries:
+            changes = entry.get('changes') if isinstance(entry, dict) else []
+            if not isinstance(changes, list):
+                continue
+
+            for change in changes:
+                value = change.get('value') if isinstance(change, dict) else {}
+                if not isinstance(value, dict):
+                    continue
+
+                phone_number_id = str((value.get('metadata') or {}).get('phone_number_id') or '').strip()
+                messages = value.get('messages') or []
+                if not isinstance(messages, list):
+                    continue
+
+                for message in messages:
+                    if not isinstance(message, dict):
+                        continue
+
+                    button_payload = PendingAttachmentDispatchService._extract_button_payload(message)
+                    if not button_payload:
+                        continue
+
+                    wa_id = str(message.get('from') or '').strip()
+                    trigger_message_id = str(message.get('id') or '').strip()
+                    if not wa_id or not phone_number_id:
+                        continue
+
+                    triggers.append({
+                        'phone_number_id': phone_number_id,
+                        'wa_id': wa_id,
+                        'button_payload': button_payload,
+                        'trigger_message_id': trigger_message_id,
+                        'raw_message': message,
+                    })
+
+        return triggers
+
+    @staticmethod
+    def _extract_button_payload(message: dict) -> str:
+        message_type = str(message.get('type') or '').strip().lower()
+
+        if message_type == 'interactive':
+            interactive = message.get('interactive')
+            if isinstance(interactive, dict):
+                button_reply = interactive.get('button_reply')
+                if isinstance(button_reply, dict):
+                    return str(button_reply.get('id') or '').strip()
+
+        if message_type == 'button':
+            button_block = message.get('button')
+            if isinstance(button_block, dict):
+                return str(button_block.get('payload') or '').strip()
+
+        return ''
+
+    @staticmethod
+    def _dispatch_trigger(phone_number_id: str, wa_id: str, button_payload: str, trigger_message_id: str, raw_message: dict):
+        sender = (
+            WhatsAppSender.objects
+            .filter(phone_number_id=phone_number_id)
+            .order_by('-created_at')
+            .first()
+        )
+        if sender is None:
+            logger.warning('[PENDING ATTACHMENT] Sender não encontrado para phone_number_id=%s', phone_number_id)
+            return
+
+        with transaction.atomic():
+            pending = (
+                WhatsAppPendingAttachment.objects
+                .select_for_update()
+                .filter(
+                    sender=sender,
+                    wa_id=wa_id,
+                    button_payload=button_payload,
+                    status='pending',
+                )
+                .order_by('created_at')
+                .first()
+            )
+
+            if pending is None:
+                logger.info(
+                    '[PENDING ATTACHMENT] Sem pendência para sender=%s wa_id=%s payload=%s',
+                    sender.id,
+                    wa_id,
+                    button_payload,
+                )
+                return
+
+            if trigger_message_id and pending.trigger_message_id == trigger_message_id and pending.status in ('sending', 'sent'):
+                logger.info('[PENDING ATTACHMENT] Trigger duplicado ignorado pending_id=%s', pending.id)
+                return
+
+            pending.status = 'sending'
+            pending.attempts = int(pending.attempts or 0) + 1
+            pending.trigger_message_id = trigger_message_id
+            pending.error_message = ''
+            pending.save(update_fields=['status', 'attempts', 'trigger_message_id', 'error_message', 'updated_at'])
+
+        api_service = WhatsAppAPIService()
+        access_token = sender.get_access_token()
+
+        pending_file = pending.file
+        if not pending_file:
+            pending.status = 'failed'
+            pending.error_message = 'Arquivo pendente não encontrado.'
+            pending.save(update_fields=['status', 'error_message', 'updated_at'])
+            return
+
+        if hasattr(pending_file, 'open'):
+            pending_file.open('rb')
+
+        try:
+            upload_result = api_service.upload_media(
+                file_obj=pending_file,
+                mime_type=pending.mime_type,
+                access_token=access_token,
+                phone_number_id=sender.phone_number_id,
+                filename=pending.original_name or os.path.basename(pending.file.name),
+            )
+            if not upload_result.get('success'):
+                pending.status = 'failed'
+                pending.error_message = str(upload_result.get('error') or 'Falha ao subir arquivo para Meta')
+                pending.save(update_fields=['status', 'error_message', 'updated_at'])
+                return
+
+            send_result = api_service.send_document_message(
+                to_number=wa_id,
+                media_id=upload_result.get('media_id', ''),
+                caption=pending.caption,
+                filename=pending.original_name,
+                access_token=access_token,
+                phone_number_id=sender.phone_number_id,
+            )
+            if not send_result.get('success'):
+                pending.status = 'failed'
+                pending.error_message = str(send_result.get('error') or 'Falha ao enviar documento')
+                pending.save(update_fields=['status', 'error_message', 'updated_at'])
+                return
+
+            outbound_payload = {
+                'pending_attachment_id': pending.id,
+                'button_payload': button_payload,
+                'trigger_message_id': trigger_message_id,
+                'trigger_message': raw_message,
+                'upload_result': upload_result,
+                'send_result': send_result,
+            }
+
+            outbound = WhatsAppOutboundMessage.objects.create(
+                to_wa_id=wa_id,
+                text_body=pending.caption or f"[documento] {pending.original_name or pending.file.name}",
+                whatsapp_message_id=send_result.get('message_id', ''),
+                phone_number_id=sender.phone_number_id,
+                status='enviado' if send_result.get('status') == 'sent' else send_result.get('status', 'enviado'),
+                sent_by=sender.user,
+                payload=outbound_payload,
+            )
+
+            pending.status = 'sent'
+            pending.error_message = ''
+            pending.sent_at = timezone.now()
+            pending.payload = {
+                **dict(pending.payload or {}),
+                'outbound_id': outbound.id,
+                'meta_media_id': upload_result.get('media_id', ''),
+                'whatsapp_message_id': send_result.get('message_id', ''),
+            }
+            pending.save(update_fields=['status', 'error_message', 'sent_at', 'payload', 'updated_at'])
+        finally:
+            if hasattr(pending_file, 'close'):
+                pending_file.close()
 
 
 class WebhookHandlerService:

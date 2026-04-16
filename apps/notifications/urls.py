@@ -7,6 +7,7 @@ from .views import (
     whatsapp_webhook_verify_view,
     whatsapp_inbox_view,
     whatsapp_send_text_view,
+    whatsapp_pending_attachment_create_view,
     whatsapp_media_access_view,
 )
 
@@ -19,4 +20,5 @@ urlpatterns = [
     path('whatsapp/inbox/', whatsapp_inbox_view, name='whatsapp-inbox'),
     path('whatsapp/media/<int:asset_id>/', whatsapp_media_access_view, name='whatsapp-media-access'),
     path('whatsapp/send-text/', whatsapp_send_text_view, name='whatsapp-send-text'),
+    path('whatsapp/pending-attachments/', whatsapp_pending_attachment_create_view, name='whatsapp-pending-attachment-create'),
 ]
