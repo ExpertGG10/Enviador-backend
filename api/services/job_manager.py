@@ -215,6 +215,8 @@ def run_job_in_thread(job_id: str):
         mark_running(job_id)
         job = get_job(job_id)
         payload = job.get('payload') if job else {}
+        if isinstance(payload, dict):
+            payload['_job_id'] = job_id
         channel = (payload or {}).get('channel', 'email')
         try:
             print(f"[JOB {job_id}] Starting job with payload: {payload}")

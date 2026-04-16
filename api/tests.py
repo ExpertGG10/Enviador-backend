@@ -8,6 +8,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework.test import APIClient
 
 from apps.auth_app.models import WhatsAppSender, WhatsAppTemplate
+from apps.notifications.models import WhatsAppPendingAttachment
 from api.services.whatsapp_service import WhatsAppService
 
 
@@ -357,3 +358,114 @@ class WhatsAppServiceTemplateResultTests(TestCase):
 
         self.assertEqual(result['status'], 'partial_success')
         self.assertEqual(result['summary'], {'total': 2, 'success': 1, 'failed': 1})
+
+
+class WhatsAppTemplateAttachmentBatchTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='batch-whatsapp-user',
+            email='batch-whatsapp@example.com',
+            password='testpass123',
+        )
+
+        self.sender = WhatsAppSender.objects.create(
+            user=self.user,
+            phone_number='5541999999999',
+            phone_number_id='123456789',
+            waba_id='987654321',
+        )
+        self.sender.set_access_token('secret-token')
+        self.sender.save()
+
+    @patch('api.services.whatsapp_service.WhatsAppService._send_template_message')
+    def test_bulk_mode_persists_number_file_binding(self, send_template_mock):
+        send_template_mock.return_value = {
+            'success': True,
+            'status_code': 200,
+            'message_id': 'wamid.template.1',
+            'response': {'messages': [{'id': 'wamid.template.1'}]},
+        }
+
+        payload = {
+            'mode': 'template_with_pending_attachments',
+            'whatsapp_sender_id': str(self.sender.id),
+            '_job_owner_user_id': self.user.id,
+            'whatsapp_access_token': 'secret-token',
+            'whatsapp_phone_number_id': self.sender.phone_number_id,
+            'whatsapp_button_attachment_bindings': [
+                {
+                    'button_payload': 'PAGAR_MENSALIDADE',
+                    'file_column': 'arquivo_mensalidade',
+                    'caption_column': 'mensagem_mensalidade',
+                    'required': True,
+                },
+            ],
+            '_files': {
+                'uploads': [
+                    {'name': 'boleto_jose.pdf', 'content': b'fake-pdf-1', 'size': 10},
+                ]
+            },
+            'resolved_template_messages': [
+                {
+                    'recipient': '5541991111222',
+                    'template': {'name': 'template_mensalidade'},
+                    'row': {
+                        'arquivo_mensalidade': 'boleto_jose.pdf',
+                        'mensagem_mensalidade': 'Segue seu boleto de abril',
+                    },
+                },
+            ],
+        }
+
+        result = WhatsAppService.send(payload)
+
+        self.assertEqual(result['status'], 'success')
+        self.assertEqual(result['summary']['total'], 1)
+        self.assertEqual(result['summary']['pending_links_created'], 1)
+
+        pending = WhatsAppPendingAttachment.objects.get(
+            sender=self.sender,
+            wa_id='5541991111222',
+            button_payload='PAGAR_MENSALIDADE',
+        )
+        self.assertEqual(pending.original_name, 'boleto_jose.pdf')
+        self.assertEqual(pending.caption, 'Segue seu boleto de abril')
+        self.assertEqual(pending.status, 'pending')
+        self.assertTrue(bool(pending.file.name))
+        self.assertEqual(pending.payload.get('template_message_id'), 'wamid.template.1')
+
+    @patch('api.services.whatsapp_service.WhatsAppService._send_template_message')
+    def test_bulk_mode_fails_when_required_file_missing(self, send_template_mock):
+        payload = {
+            'mode': 'template_with_pending_attachments',
+            'whatsapp_sender_id': str(self.sender.id),
+            '_job_owner_user_id': self.user.id,
+            'whatsapp_access_token': 'secret-token',
+            'whatsapp_phone_number_id': self.sender.phone_number_id,
+            'whatsapp_button_attachment_bindings': [
+                {
+                    'button_payload': 'PAGAR_MENSALIDADE',
+                    'file_column': 'arquivo_mensalidade',
+                    'required': True,
+                },
+            ],
+            '_files': {
+                'uploads': [
+                    {'name': 'outro_arquivo.pdf', 'content': b'fake-pdf', 'size': 8},
+                ]
+            },
+            'resolved_template_messages': [
+                {
+                    'recipient': '5541991111222',
+                    'template': {'name': 'template_mensalidade'},
+                    'row': {'arquivo_mensalidade': 'boleto_jose.pdf'},
+                },
+            ],
+        }
+
+        result = WhatsAppService.send(payload)
+
+        self.assertEqual(result['status'], 'error')
+        self.assertEqual(result['summary']['failed'], 1)
+        self.assertEqual(result['summary']['pending_links_created'], 0)
+        send_template_mock.assert_not_called()

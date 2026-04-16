@@ -323,6 +323,7 @@ def _resolve_whatsapp_template_messages(payload: dict, user):
             'template': template_payload,
             'params': [param.get('text', '') for param in all_parameters],
             'parameters': all_parameters,
+            'row': row,
         })
 
     payload['phone_number'] = sender.phone_number
@@ -783,6 +784,7 @@ def jobs_start_view(request):
             return HttpResponseBadRequest('Invalid JSON')
 
     payload = _apply_sender_fallback(payload, request.user)
+    payload['_job_owner_user_id'] = request.user.id
 
     channel = payload.get('channel', 'email')
     if channel not in ('email', 'whatsapp'):
@@ -819,6 +821,14 @@ def jobs_start_view(request):
         if error_response is not None:
             return error_response
         payload = prepared_payload
+
+    if channel == 'whatsapp' and str(payload.get('mode') or '').strip() == 'template_with_pending_attachments':
+        bindings = payload.get('whatsapp_button_attachment_bindings')
+        if not isinstance(bindings, list) or not bindings:
+            return JsonResponse({'error': 'whatsapp_button_attachment_bindings is required for mode template_with_pending_attachments'}, status=400)
+
+        if not payload.get('_files'):
+            return JsonResponse({'error': 'Arquivos multipart são obrigatórios para mode template_with_pending_attachments'}, status=400)
 
     owner_email = request.user.email
     
