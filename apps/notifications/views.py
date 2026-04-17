@@ -92,6 +92,46 @@ def _extract_media_caption(message: WhatsAppWebhookMessage) -> str:
     return str(caption).strip() if caption is not None else ''
 
 
+def _collect_webhook_counts(data: dict):
+    """Conta mensagens e status no payload de webhook."""
+    message_count = 0
+    status_count = 0
+    phone_number_ids = set()
+
+    entries = data.get('entry') if isinstance(data, dict) else []
+    if not isinstance(entries, list):
+        return 0, 0, []
+
+    for entry in entries:
+        changes = entry.get('changes') if isinstance(entry, dict) else []
+        if not isinstance(changes, list):
+            continue
+
+        for change in changes:
+            value = change.get('value') if isinstance(change, dict) else {}
+            if not isinstance(value, dict):
+                continue
+
+            metadata = value.get('metadata') or {}
+            phone_number_id = str(metadata.get('phone_number_id') or '').strip()
+            if phone_number_id:
+                phone_number_ids.add(phone_number_id)
+
+            messages = value.get('messages') or []
+            statuses = value.get('statuses') or []
+            if isinstance(messages, list):
+                message_count += len(messages)
+            if isinstance(statuses, list):
+                status_count += len(statuses)
+
+    return message_count, status_count, sorted(phone_number_ids)
+
+
+def _is_status_only_webhook(data: dict) -> bool:
+    message_count, status_count, _ = _collect_webhook_counts(data)
+    return status_count > 0 and message_count == 0
+
+
 @csrf_exempt
 @api_view(['GET', 'POST'])
 @permission_classes([AllowAny])
@@ -122,8 +162,17 @@ def whatsapp_webhook_callback_view(request):
         except Exception:
             return JsonResponse({'error': 'Invalid JSON'}, status=400)
 
-    logger.info('Webhook WhatsApp recebido')
-    logger.info(json.dumps(data, ensure_ascii=False, indent=2))
+    message_count, status_count, phone_number_ids = _collect_webhook_counts(data)
+    if _is_status_only_webhook(data):
+        logger.info(
+            'Webhook WhatsApp recebido (status-only): statuses=%s messages=%s phone_number_ids=%s',
+            status_count,
+            message_count,
+            phone_number_ids,
+        )
+    else:
+        logger.info('Webhook WhatsApp recebido')
+        logger.info(json.dumps(data, ensure_ascii=False, indent=2))
 
     try:
         WebhookHandlerService.log_webhook_event(data)
@@ -277,6 +326,7 @@ def whatsapp_webhook_view(request):
     except json.JSONDecodeError:
         return JsonResponse({'error': 'Invalid JSON'}, status=400)
     
+    message_count, status_count, phone_number_ids = _collect_webhook_counts(data)
     logger.info(f"Webhook recebido de {request.META.get('HTTP_ORIGIN', 'UNKNOWN')}")
     
     # Log do evento
@@ -287,8 +337,17 @@ def whatsapp_webhook_view(request):
     except Exception:
         logger.exception('Erro ao processar pendências de anexo via webhook')
     
-    # Parse do evento
-    events = WebhookHandlerService.parse_webhook_event(data)
+    # Parse detalhado apenas para payload com mensagens (evita logs verbosos de status-only).
+    if _is_status_only_webhook(data):
+        logger.info(
+            'Webhook status-only processado: statuses=%s messages=%s phone_number_ids=%s',
+            status_count,
+            message_count,
+            phone_number_ids,
+        )
+        events = []
+    else:
+        events = WebhookHandlerService.parse_webhook_event(data)
     
     if events:
         logger.info(f"{len(events)} evento(s) processado(s)")
@@ -462,7 +521,6 @@ def whatsapp_inbox_view(request):
 @permission_classes([IsAuthenticated])
 def whatsapp_media_access_view(request, asset_id: int):
     """Retorna URL de acesso da mídia salva no storage para uso do frontend."""
-    logger.info('[MEDIA ACCESS] Requisição recebida user_id=%s asset_id=%s', getattr(request.user, 'id', None), asset_id)
     asset = get_object_or_404(WhatsAppMediaAsset, id=asset_id)
 
     if asset.status != 'ready' or not asset.file:
@@ -481,13 +539,6 @@ def whatsapp_media_access_view(request, asset_id: int):
             },
             status=HTTP_404_NOT_FOUND,
         )
-
-    logger.info(
-        '[MEDIA ACCESS] URL gerada asset_id=%s media_type=%s mime_type=%s',
-        asset.id,
-        asset.media_type,
-        asset.mime_type,
-    )
 
     return Response(
         {
