@@ -6,6 +6,7 @@ import logging
 import json
 import re
 import unicodedata
+import mimetypes
 
 from django.db import transaction
 from django.utils import timezone
@@ -202,7 +203,10 @@ class WhatsAppAPIService:
 
             url = f"{self.BASE_URL}/{phone_id}/media"
             safe_filename = str(filename or getattr(file_obj, 'name', 'attachment.bin') or 'attachment.bin')
-            safe_mime_type = str(mime_type or 'application/octet-stream')
+            safe_mime_type = str(mime_type or '').strip()
+            if not safe_mime_type or safe_mime_type == 'application/octet-stream':
+                guessed_mime, _ = mimetypes.guess_type(safe_filename)
+                safe_mime_type = guessed_mime or 'application/octet-stream'
 
             if hasattr(file_obj, 'seek'):
                 file_obj.seek(0)
@@ -233,6 +237,25 @@ class WhatsAppAPIService:
                 'payload': payload,
             }
 
+        except requests.HTTPError as e:
+            response_text = ''
+            try:
+                response_text = e.response.text if e.response is not None else ''
+            except Exception:
+                response_text = ''
+            logger.error(
+                "Erro HTTP ao fazer upload de mídia WhatsApp: %s | filename=%s mime=%s response=%s",
+                str(e),
+                str(filename or getattr(file_obj, 'name', 'attachment.bin') or 'attachment.bin'),
+                str(mime_type or ''),
+                response_text,
+            )
+            return {
+                'success': False,
+                'error': str(e),
+                'status': 'failed',
+                'detail': response_text,
+            }
         except Exception as e:
             logger.error(f"Erro ao fazer upload de mídia WhatsApp: {str(e)}")
             return {

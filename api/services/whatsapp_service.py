@@ -7,6 +7,7 @@ import requests
 from typing import Dict, List
 from io import BytesIO
 import re
+import mimetypes
 
 from django.core.files.base import ContentFile
 
@@ -212,7 +213,10 @@ class WhatsAppService:
 
                 file_name = str(file_entry.get('name') or 'attachment.bin')
                 file_content = file_entry.get('content') or b''
-                mime_type = str(binding.get('mime_type') or 'application/octet-stream').strip()
+                mime_type = str(binding.get('mime_type') or '').strip()
+                if not mime_type or mime_type == 'application/octet-stream':
+                    guessed_mime, _ = mimetypes.guess_type(file_name)
+                    mime_type = guessed_mime or 'application/octet-stream'
                 file_size_bytes = int(file_entry.get('size') or len(file_content))
 
                 pending = WhatsAppPendingAttachment.objects.create(
