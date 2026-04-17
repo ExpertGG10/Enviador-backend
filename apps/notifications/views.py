@@ -4,6 +4,7 @@ import json
 import os
 import hashlib
 import unicodedata
+import re
 from collections import defaultdict
 from datetime import datetime, timezone
 import requests
@@ -162,6 +163,11 @@ def whatsapp_webhook_callback_view(request):
 def _normalize(text: str) -> str:
     """Remove acentos e converte para minúsculas para comparação."""
     return unicodedata.normalize('NFD', text).encode('ascii', 'ignore').decode('ascii').lower()
+
+
+def _normalize_wa_id(wa_id: str) -> str:
+    """Normaliza identificador WhatsApp para apenas dígitos."""
+    return re.sub(r'\D+', '', str(wa_id or '').strip())
 
 
 def _send_whatsapp_reply(phone_number_id: str, to: str, received_body: str):
@@ -565,7 +571,7 @@ def whatsapp_send_text_view(request):
 def whatsapp_pending_attachment_create_view(request):
     """Cria anexo pendente aguardando clique de botão para envio ao contato."""
     sender_id = request.data.get('sender_id')
-    wa_id = str(request.data.get('wa_id', '')).strip()
+    wa_id = _normalize_wa_id(request.data.get('wa_id', ''))
     button_payload = str(request.data.get('button_payload', '')).strip()
     media_type = str(request.data.get('media_type', 'document')).strip().lower()
     caption = str(request.data.get('caption', '')).strip()

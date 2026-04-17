@@ -29,6 +29,10 @@ class WhatsAppService:
     GRAPH_API_BASE_URL = 'https://graph.facebook.com/v22.0'
 
     @staticmethod
+    def _normalize_wa_id(value: str) -> str:
+        return re.sub(r'\D+', '', str(value or '').strip())
+
+    @staticmethod
     def _normalize_file_ref(value: str) -> str:
         text = str(value or '').strip().lower()
         text = re.sub(r'^[\s\-\u2192>»•]+', '', text)
@@ -157,7 +161,7 @@ class WhatsAppService:
         previews = []
 
         for idx, item in enumerate(resolved_template_messages, start=1):
-            recipient = str(item.get('recipient') or '').strip()
+            recipient = WhatsAppService._normalize_wa_id(item.get('recipient'))
             template_payload = item.get('template') or {}
             row_data = item.get('row') or {}
 

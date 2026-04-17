@@ -5,6 +5,7 @@ import requests
 import logging
 import json
 import re
+import unicodedata
 
 from django.db import transaction
 from django.utils import timezone
@@ -310,6 +311,43 @@ class PendingAttachmentDispatchService:
     """Processa eventos de botao e dispara anexos pendentes para o contato."""
 
     @staticmethod
+    def _normalize_wa_id(wa_id: str) -> str:
+        return re.sub(r'\D+', '', str(wa_id or ''))
+
+    @staticmethod
+    def _wa_id_variants(wa_id: str):
+        """Gera variações simples para celular BR com/sem nono dígito."""
+        normalized = PendingAttachmentDispatchService._normalize_wa_id(wa_id)
+        variants = {normalized} if normalized else set()
+
+        if not normalized.startswith('55'):
+            return variants
+
+        local = normalized[2:]
+        # 55 + DDD(2) + 9 + numero(8)
+        if len(local) == 11 and local[2:3] == '9':
+            variants.add('55' + local[:2] + local[3:])
+        # 55 + DDD(2) + numero(8)
+        if len(local) == 10:
+            variants.add('55' + local[:2] + '9' + local[2:])
+
+        return variants
+
+    @staticmethod
+    def _normalize_button_payload(payload: str) -> str:
+        text = str(payload or '').strip()
+        if not text:
+            return ''
+
+        ascii_text = (
+            unicodedata.normalize('NFD', text)
+            .encode('ascii', 'ignore')
+            .decode('ascii')
+        )
+        canonical = re.sub(r'[^a-zA-Z0-9]+', '_', ascii_text).strip('_').upper()
+        return canonical
+
+    @staticmethod
     def dispatch_from_webhook_payload(data: dict):
         triggers = PendingAttachmentDispatchService._extract_button_triggers(data)
         for trigger in triggers:
@@ -403,19 +441,40 @@ class PendingAttachmentDispatchService:
             logger.warning('[PENDING ATTACHMENT] Sender não encontrado para phone_number_id=%s', phone_number_id)
             return
 
+        normalized_wa_variants = PendingAttachmentDispatchService._wa_id_variants(wa_id)
+        normalized_payload = PendingAttachmentDispatchService._normalize_button_payload(button_payload)
+
         with transaction.atomic():
-            pending = (
+            pending_queryset = (
                 WhatsAppPendingAttachment.objects
                 .select_for_update()
-                .filter(
-                    sender=sender,
-                    wa_id=wa_id,
-                    button_payload=button_payload,
-                    status='pending',
-                )
+                .filter(sender=sender, status='pending')
                 .order_by('created_at')
+            )
+
+            # Primeiro tenta match exato (mais barato e previsível).
+            pending = (
+                pending_queryset
+                .filter(wa_id=wa_id, button_payload=button_payload)
                 .first()
             )
+
+            # Fallback simples para inconsistências comuns de formatação.
+            if pending is None:
+                for candidate in pending_queryset[:200]:
+                    candidate_wa = PendingAttachmentDispatchService._normalize_wa_id(candidate.wa_id)
+                    candidate_payload = PendingAttachmentDispatchService._normalize_button_payload(candidate.button_payload)
+                    if candidate_wa in normalized_wa_variants and candidate_payload == normalized_payload:
+                        pending = candidate
+                        logger.info(
+                            '[PENDING ATTACHMENT] Match normalizado pending_id=%s webhook_wa_id=%s stored_wa_id=%s webhook_payload=%s stored_payload=%s',
+                            pending.id,
+                            wa_id,
+                            candidate.wa_id,
+                            button_payload,
+                            candidate.button_payload,
+                        )
+                        break
 
             if pending is None:
                 logger.info(
